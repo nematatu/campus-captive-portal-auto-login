@@ -29,9 +29,20 @@ PASSWORD = os.getenv("CAPTIVE_PASSWORD", "")
 USERNAME_SELECTOR = (os.getenv("USERNAME_SELECTOR") or DEFAULT_USERNAME_SELECTOR).strip()
 PASSWORD_SELECTOR = (os.getenv("PASSWORD_SELECTOR") or DEFAULT_PASSWORD_SELECTOR).strip()
 SUBMIT_SELECTOR = (os.getenv("SUBMIT_SELECTOR") or DEFAULT_SUBMIT_SELECTOR).strip()
+INVALID_CREDENTIALS_TEXT = (
+    os.getenv("PORTAL_INVALID_CREDENTIALS_TEXT")
+    or "ユーザー名またはパスワードが無効です"
+).strip()
+REQUIRED_PARAMETER_TEXT = (
+    os.getenv("PORTAL_REQUIRED_PARAMETER_TEXT") or "required parameter unavailable"
+).strip()
 
 SCREENSHOT_DIR = Path("screenshots")
 SCREENSHOT_DIR.mkdir(exist_ok=True)
+
+LOGIN_OK = "ok"
+LOGIN_INVALID_CREDENTIALS = "invalid_credentials"
+LOGIN_REQUIRED_PARAMETER = "required_parameter"
 
 
 def timestamp() -> str:
@@ -123,11 +134,131 @@ def wait_submit_enabled(page) -> None:
     log("ログインボタン有効化確認完了")
 
 
-def click_submit(page) -> None:
-    log("ログインボタン押下開始")
+def log_before_submit_diagnostics(page) -> None:
+    log(f"送信直前診断: current_url={page.url}")
+    diagnostics = page.evaluate(
+        """
+        ({ usernameSelector, passwordSelector, submitSelector }) => {
+          const form = document.querySelector("form");
+          const user = document.querySelector(usernameSelector);
+          const password = document.querySelector(passwordSelector);
+          const submit = document.querySelector(submitSelector);
+          return {
+            form: form ? {
+              id: form.id || "",
+              name: form.getAttribute("name") || "",
+              action: form.getAttribute("action") || "",
+              actionResolved: form.action || "",
+              method: form.getAttribute("method") || form.method || "",
+            } : null,
+            hiddenInputs: Array.from(document.querySelectorAll('input[type="hidden"]')).map((input) => ({
+              name: input.getAttribute("name") || "",
+              value: input.value || "",
+            })),
+            userInput: user ? {
+              name: user.getAttribute("name") || "",
+              id: user.id || "",
+              hasValue: !!user.value,
+            } : null,
+            passwordInput: password ? {
+              name: password.getAttribute("name") || "",
+              id: password.id || "",
+              hasValue: !!password.value,
+            } : null,
+            submitInput: submit ? {
+              id: submit.id || "",
+              disabled: !!submit.disabled,
+            } : null,
+          };
+        }
+        """,
+        {
+            "usernameSelector": USERNAME_SELECTOR,
+            "passwordSelector": PASSWORD_SELECTOR,
+            "submitSelector": SUBMIT_SELECTOR,
+        },
+    )
+
+    form = diagnostics["form"]
+    if form:
+        log(
+            "送信直前診断: "
+            f"form id={form['id']!r}, name={form['name']!r}, "
+            f"action={form['action']!r}, action_resolved={form['actionResolved']!r}, "
+            f"method={form['method']!r}"
+        )
+    else:
+        log("送信直前診断: form が見つかりません")
+
+    hidden_inputs = diagnostics["hiddenInputs"]
+    log(f"送信直前診断: hidden input count={len(hidden_inputs)}")
+    for index, hidden_input in enumerate(hidden_inputs, start=1):
+        log(
+            "送信直前診断: "
+            f"hidden[{index}] name={hidden_input['name']!r}, value={hidden_input['value']!r}"
+        )
+
+    for label, key in (("user", "userInput"), ("password", "passwordInput")):
+        input_info = diagnostics[key]
+        if input_info:
+            log(
+                "送信直前診断: "
+                f"{label} input name={input_info['name']!r}, "
+                f"id={input_info['id']!r}, value_present={input_info['hasValue']}"
+            )
+        else:
+            log(f"送信直前診断: {label} input が見つかりません")
+
+    submit_input = diagnostics["submitInput"]
+    if submit_input:
+        log(
+            "送信直前診断: "
+            f"submit input id={submit_input['id']!r}, disabled={submit_input['disabled']}"
+        )
+    else:
+        log("送信直前診断: submit input が見つかりません")
+
+
+def submit_login(page, submit_mode: str) -> None:
+    log(f"ログイン送信開始: mode={submit_mode}")
     wait_submit_enabled(page)
-    page.locator(SUBMIT_SELECTOR).first.click()
-    log(f"ログインボタン押下完了: selector={SUBMIT_SELECTOR}")
+    if submit_mode == "click":
+        page.locator(SUBMIT_SELECTOR).first.click()
+    elif submit_mode == "nwa":
+        page.evaluate(
+            """
+            (submitSelector) => {
+              const form = document.querySelector("form");
+              const submit = document.querySelector(submitSelector);
+              if (!form) {
+                throw new Error("form was not found");
+              }
+              if (!submit) {
+                throw new Error("submit input was not found");
+              }
+              if (typeof window.Nwa_SubmitForm !== "function") {
+                throw new Error("Nwa_SubmitForm was not found");
+              }
+              window.Nwa_SubmitForm(form.id, submit.id);
+            }
+            """,
+            SUBMIT_SELECTOR,
+        )
+    elif submit_mode == "form-submit":
+        page.evaluate(
+            """
+            () => {
+              const form = document.querySelector("form");
+              if (!form) {
+                throw new Error("form was not found");
+              }
+              form.submit();
+            }
+            """
+        )
+    else:
+        raise RuntimeError(f"Unknown submit mode: {submit_mode}")
+    log(f"ログイン送信完了: mode={submit_mode}, selector={SUBMIT_SELECTOR}")
 
 
 def save_screenshot(page, path: Path) -> None:
@@ -135,7 +266,18 @@ def save_screenshot(page, path: Path) -> None:
     log(f"スクリーンショット保存完了: {path}")
 
 
-def run_login(dry_run: bool) -> bool:
+def detect_login_failure(page) -> str | None:
+    body_text = page.evaluate(
+        "() => document.body ? document.body.innerText : document.documentElement.innerText"
+    )
+    if INVALID_CREDENTIALS_TEXT and INVALID_CREDENTIALS_TEXT in body_text:
+        return LOGIN_INVALID_CREDENTIALS
+    if REQUIRED_PARAMETER_TEXT and REQUIRED_PARAMETER_TEXT in body_text:
+        return LOGIN_REQUIRED_PARAMETER
+    return None
+
+
+def run_login(dry_run: bool, submit_mode: str) -> str:
     require_credentials()
 
     ts = timestamp()
@@ -168,21 +310,26 @@ def run_login(dry_run: bool) -> bool:
             if dry_run:
                 log("dry-run: ログイン送信せず終了")
                 log(f"最終URL: {page.url}")
-                return True
+                return LOGIN_OK
 
-            click_submit(page)
+            log_before_submit_diagnostics(page)
+            submit_login(page, submit_mode=submit_mode)
 
             log("ログイン後待機開始: 10秒")
             page.wait_for_timeout(10_000)
             log(f"ログイン後待機完了: current_url={page.url}")
 
             save_screenshot(page, SCREENSHOT_DIR / f"{ts}-03-after-submit.png")
-            if page.locator("text=ユーザー名またはパスワードが無効です").count() > 0:
-                log("失敗: 認証エラーを検出")
-                return False
+            login_failure = detect_login_failure(page)
+            if login_failure == LOGIN_INVALID_CREDENTIALS:
+                log("認証失敗: 認証情報エラーを検出")
+                return login_failure
+            if login_failure == LOGIN_REQUIRED_PARAMETER:
+                log("フォームパラメータ不足: required parameter unavailable を検出")
+                return login_failure
 
             log(f"最終URL: {page.url}")
-            return True
+            return LOGIN_OK
 
         except PlaywrightTimeoutError as error:
             error_path = SCREENSHOT_DIR / f"{ts}-error-timeout.png"
@@ -204,10 +351,16 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="Fill the form but do not submit.")
     parser.add_argument("--force", action="store_true", help="Run login even if connectivity check succeeds.")
+    parser.add_argument(
+        "--submit-mode",
+        choices=["click", "nwa", "form-submit"],
+        default="nwa",
+        help="Submit method. Default: nwa.",
+    )
     args = parser.parse_args()
 
     log("処理開始")
-    log(f"mode: dry_run={args.dry_run}, force={args.force}")
+    log(f"mode: dry_run={args.dry_run}, force={args.force}, submit_mode={args.submit_mode}")
 
     online_before = check_online()
 
@@ -219,10 +372,15 @@ def main() -> None:
         log("注意: 実行前からオンライン。ログイン成功判定はできない")
 
     log("オフラインまたは強制実行: Captive Portal 認証処理を開始")
-    login_result = run_login(dry_run=args.dry_run)
+    login_result = run_login(dry_run=args.dry_run, submit_mode=args.submit_mode)
 
-    if not login_result:
-        log("失敗: 認証エラーを検出")
+    if login_result == LOGIN_INVALID_CREDENTIALS:
+        log("認証失敗")
+        log("処理終了")
+        return
+
+    if login_result == LOGIN_REQUIRED_PARAMETER:
+        log("フォームパラメータ不足")
         log("処理終了")
         return
 
@@ -233,11 +391,11 @@ def main() -> None:
     online_after = check_online()
 
     if not online_before and online_after:
-        log("成功: オフライン状態からインターネット接続が復旧")
+        log("復旧成功: オフライン状態からインターネット接続が復旧")
     elif online_before and online_after:
         log("疎通OK: ただし実行前からオンラインのため、ログイン成功とは判定しない")
     else:
-        log("失敗: ログイン試行後も疎通確認に失敗")
+        log("ログイン後も疎通失敗")
 
     log("処理終了")
 

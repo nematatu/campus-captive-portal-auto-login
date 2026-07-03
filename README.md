@@ -101,6 +101,11 @@ CAPTIVE_PORTAL_URL=http://cpauth.cc.miyazaki-u.ac.jp/guest/cp-login.php
 CAPTIVE_USERNAME=your-id
 CAPTIVE_PASSWORD=your-password
 CHECK_URL=http://connectivitycheck.gstatic.com/generate_204
+USERNAME_SELECTOR=input[name="user"]
+PASSWORD_SELECTOR=input[name="password"]
+SUBMIT_SELECTOR=input[type="submit"]
+PORTAL_INVALID_CREDENTIALS_TEXT=ユーザー名またはパスワードが無効です
+PORTAL_REQUIRED_PARAMETER_TEXT=required parameter unavailable
 ```
 
 `.env` は Git に入れない。
@@ -119,9 +124,9 @@ login.png
 
 `login.png` に認証フォームが表示されていれば、Playwright から認証ページを開けている。
 
-## 本番スクリプトの予定
+## 本番スクリプト
 
-`captive_login.py` は以下の流れにする予定。
+`captive_login.py` は以下の流れで実行する。
 
 ```text
 外部疎通確認
@@ -132,7 +137,7 @@ login.png
 ↓
 ID / Password 入力
 ↓
-ログインボタン押下
+ログイン送信
 ↓
 数秒待機
 ↓
@@ -156,6 +161,20 @@ python captive_login.py --dry-run
 ```bash
 python captive_login.py --force
 ```
+
+送信方法の指定:
+
+```bash
+python captive_login.py --submit-mode nwa
+python captive_login.py --submit-mode click
+python captive_login.py --submit-mode form-submit
+```
+
+`--submit-mode nwa` がデフォルト。ページ内に `Nwa_SubmitForm` がある場合、`Nwa_SubmitForm(form.id, submit.id)` 経由で送信する。
+
+`required parameter unavailable` が出る場合は、送信直前ログに出る hidden input、form action / method、submit mode を確認する。
+
+`--force` は、実行前からオンラインの状態でもログイン処理を試すためのオプション。実行前からオンラインだった場合、実行後もオンラインであってもログイン成功とは判定しない。
 
 ## 定期実行方針
 
