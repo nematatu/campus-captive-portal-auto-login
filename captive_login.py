@@ -228,14 +228,20 @@ def setup_network_logging(page) -> None:
 def open_login_page(page, entry_mode: str) -> None:
     if entry_mode == "detect-first":
         log(f"Captive Portal 検出URL遷移開始: {CHECK_URL}")
-        page.goto(CHECK_URL, wait_until="domcontentloaded", timeout=30_000)
-        log(f"Captive Portal 検出URL遷移完了: {page.url}")
-        log("検出URL後待機開始: 5秒")
-        page.wait_for_timeout(5_000)
-        log(f"検出URL後待機完了: current_url={page.url}")
-        if has_login_form(page):
-            log("Captive Portal 検出URLからログインフォームを検出")
-            return
+        try:
+            page.goto(CHECK_URL, wait_until="domcontentloaded", timeout=30_000)
+            log(f"Captive Portal 検出URL遷移完了: {page.url}")
+            log("検出URL後待機開始: 5秒")
+            page.wait_for_timeout(5_000)
+            log(f"検出URL後待機完了: current_url={page.url}")
+            if has_login_form(page):
+                log("Captive Portal 検出URLからログインフォームを検出")
+                return
+        except PlaywrightError as error:
+            if "net::ERR_ABORTED" in str(error):
+                log(f"Captive Portal 検出URL遷移は 204 応答のため中断扱い: {error}")
+            else:
+                raise
         log("Captive Portal 検出URLではログインフォーム未検出。直接認証URLへフォールバックします")
     elif entry_mode != "direct":
         raise RuntimeError(f"Unknown entry mode: {entry_mode}")
