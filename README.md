@@ -4,7 +4,7 @@
 
 ## 目的
 
-研究室の NVIDIA PC を、Tailscale + SSH 経由の計算リソースとして使う。
+研究室の Windows PC を、Tailscale + SSH 経由の計算リソースとして使う。
 
 ただし、大学ネットワークの認証が切れると以下の状態になる。
 
@@ -12,19 +12,19 @@
 - Tailscale 切断
 - SSH 不可
 
-そのため、PC 自身が定期的に認証状態を確認し、必要なら自動で再認証する。
+そのため、PC 自身が認証状態を確認し、必要なら Captive Portal 認証を実行する。
 
-## 想定構成
+## 今回の方針
 
-```text
-NVIDIA Windows PC / WSL
-├─ Tailscale
-├─ SSH
-├─ Playwright
-└─ 定期実行スクリプト
-```
+WSL ではなく、Windows ネイティブの Python から実行する。
 
-## 現時点のファイル
+理由:
+
+- WSL の headed 実行は X server / DISPLAY に依存する。
+- 今回は、実際に見えるブラウザを起動して、通常の人間操作に近い形でログイン認証したい。
+- Windows 側で Chrome / Chromium を起動すれば、通常のデスクトップセッション上でブラウザ操作を確認できる。
+
+## ファイル
 
 ```text
 .
@@ -33,68 +33,34 @@ NVIDIA Windows PC / WSL
 ├── .env.example
 ├── .gitignore
 ├── setup.sh
-└── test.py
+├── setup_windows.bat
+├── run_windows.bat
+├── test.py
+└── captive_login.py
 ```
 
-- `test.py`: 認証ページを開いて `login.png` を保存するだけ。ログインはしない。
-- `setup.sh`: Conda 環境作成、依存関係インストール、`test.py` 実行まで行う。
-- `captive_login.py`: まだ未実装。本番用の自動ログインスクリプト予定。
+- `captive_login.py`: 本番用ログインスクリプト。
+- `setup_windows.bat`: Windows ネイティブ環境の初期セットアップ。
+- `run_windows.bat`: Windows 上で headed ブラウザを起動してログイン処理を実行。
+- `test.py`: 認証ページを開いて `login.png` を保存する簡易確認用。
 
-## セットアップ
+## Windows セットアップ
 
-WSL / Linux では以下を実行する。
+コマンドプロンプト、PowerShell、Windows Terminal のいずれかで実行する。
 
-```bash
-chmod +x setup.sh
-./setup.sh
+```bat
+setup_windows.bat
 ```
 
-`setup.sh` は以下を行う。
+実行内容:
 
-1. Conda 環境 `playwright` を作成
-2. 環境を有効化
-3. `requirements.txt` をインストール
-4. Playwright Chromium をインストール
-5. Chromium 実行に必要な apt パッケージをインストール
-6. `python test.py` を実行
+1. `.venv` 作成
+2. `requirements.txt` インストール
+3. Playwright Chromium インストール
+4. `.env.example` から `.env` を作成
+5. `logs/` と `screenshots/` を作成
 
-## 手動セットアップ
-
-```bash
-conda create -y -n playwright python=3.12
-conda activate playwright
-pip install -r requirements.txt
-playwright install chromium
-```
-
-WSL で Chromium のライブラリ不足が出た場合:
-
-```bash
-sudo apt update
-sudo apt install -y \
-  libnspr4 \
-  libnss3 \
-  libatk-bridge2.0-0 \
-  libxkbcommon0 \
-  libgbm1 \
-  libasound2t64
-```
-
-`libasound2t64` が無い場合:
-
-```bash
-sudo apt install -y libasound2
-```
-
-## 設定
-
-`.env.example` を `.env` にコピーする。
-
-```bash
-cp .env.example .env
-```
-
-`.env` 例:
+`.env` を編集する。
 
 ```env
 CAPTIVE_PORTAL_URL=http://cpauth.cc.miyazaki-u.ac.jp/guest/cp-login.php
@@ -112,156 +78,91 @@ BROWSER_ACCEPT_LANGUAGE=ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7
 
 `.env` は Git に入れない。
 
-## テスト
-
-```bash
-python test.py
-```
-
-成功すると以下が生成される。
-
-```text
-login.png
-```
-
-`login.png` に認証フォームが表示されていれば、Playwright から認証ページを開けている。
-
-## 本番スクリプト
-
-`captive_login.py` は以下の流れで実行する。
-
-```text
-外部疎通確認
-↓
-接続できるなら終了
-↓
-接続できないなら認証ページを開く
-↓
-ID / Password 入力
-↓
-ログイン送信
-↓
-数秒待機
-↓
-再度疎通確認
-```
+## Windows で手動実行
 
 通常実行:
 
-```bash
-python captive_login.py
+```bat
+run_windows.bat
 ```
 
-デフォルトでは `--entry-mode detect-first` として、ブラウザで `CHECK_URL` を開いて Captive Portal リダイレクトを先に試す。ログインフォームが検出できない場合だけ `CAPTIVE_PORTAL_URL` へフォールバックする。直接フォームURLを開くと、環境によってはサーバ側で必要な接続元パラメータが不足することがある。
+`run_windows.bat` は内部で以下に相当する実行を行う。
 
-送信なしの確認:
-
-```bash
-python captive_login.py --dry-run
+```bat
+.venv\Scripts\python.exe captive_login.py --windows-manual
 ```
+
+`--windows-manual` は以下のプリセットを適用する。
+
+```text
+--headed
+--browser-channel chrome
+--user-data-dir .playwright-profile
+--submit-mode click
+--input-mode type
+--before-submit-wait-ms 5000
+```
+
+Google Chrome が Playwright から見つからない場合、スクリプトは Playwright bundled Chromium にフォールバックする。
 
 強制実行:
 
-```bash
-python captive_login.py --force
+```bat
+run_windows.bat --force
 ```
 
-送信方法の指定:
+送信なし確認:
 
-```bash
-python captive_login.py --submit-mode nwa
-python captive_login.py --submit-mode click
-python captive_login.py --submit-mode form-submit
+```bat
+run_windows.bat --dry-run --force
 ```
 
-`--submit-mode nwa` がデフォルト。ページ内に `Nwa_SubmitForm` がある場合、`Nwa_SubmitForm(form.id, submit.id)` 経由で送信する。
+直接認証URLを開く:
 
-入力方法の指定:
-
-```bash
-python captive_login.py --input-mode type
-python captive_login.py --input-mode fill
+```bat
+run_windows.bat --force --entry-mode direct
 ```
 
-`--input-mode type` がデフォルト。手動入力に近づけるため、キー入力イベントを発火させながら入力する。
+## Python から直接実行する場合
 
-手動操作では成功するが自動実行で失敗する場合は、まず以下を試す。
-
-```bash
-python captive_login.py --force --submit-mode click --input-mode type --before-submit-wait-ms 3000
+```bat
+.venv\Scripts\python.exe captive_login.py --windows-manual --force
 ```
 
-WSL で画面表示できる場合は、headed 実行で実際の画面遷移を確認する。
+Chrome チャンネルを使わない場合:
 
-```bash
-python captive_login.py --force --headed --submit-mode click --input-mode type --before-submit-wait-ms 3000
+```bat
+.venv\Scripts\python.exe captive_login.py --headed --user-data-dir .playwright-profile --submit-mode click --input-mode type --before-submit-wait-ms 5000 --force
 ```
 
-`Missing X server or $DISPLAY` が出る場合、その WSL では headed 表示が使えない。`--headed` を外して headless で実行する。スクリプト側でも同エラー時は headless へ再試行する。
+## 実行ログ
 
-```bash
-python captive_login.py --force --user-data-dir .playwright-profile --submit-mode click --input-mode type --before-submit-wait-ms 5000
-```
-
-Chrome が Playwright から利用できる環境では、Chrome チャンネルと永続プロファイルを指定して、手動ブラウザに近い状態で検証できる。
-
-```bash
-python captive_login.py --force --headed --browser-channel chrome --user-data-dir .playwright-profile --submit-mode click --input-mode type --before-submit-wait-ms 5000
-```
-
-`Chromium distribution 'chrome' is not found` が出る場合は、`--browser-channel chrome` を外す。スクリプト側でも同エラー時は bundled Chromium へ再試行する。
-
-```bash
-python captive_login.py --force --headed --user-data-dir .playwright-profile --submit-mode click --input-mode type --before-submit-wait-ms 5000
-```
-
-スクリプトは通常のデスクトップ Chrome に近い User-Agent と `Accept-Language` を設定し、実行時に `navigator.userAgent` などのブラウザ診断ログを出す。手動ブラウザと差がある場合は、`.env` の `BROWSER_USER_AGENT` を手動ブラウザの値に合わせる。
-
-`required parameter unavailable` が出る場合は、送信直前ログに出る hidden input、form action / method、submit mode に加えて、`通信診断` の request URL / POST data、`Cookie診断`、`screenshots/*-filled.html` と `screenshots/*-after-submit.html` を確認する。POST data の ID / password 相当の値はログ上でマスクされる。
-
-`--force` は、実行前からオンラインの状態でもログイン処理を試すためのオプション。実行前からオンラインだった場合、実行後もオンラインであってもログイン成功とは判定しない。
-
-`CAPTIVE_PORTAL_URL` に Captive Portal 検出URLを指定している場合、オンライン時は認証ページへリダイレクトされず、ログインフォームが表示されないことがある。`--force` で送信方式を検証する場合は、認証フォームそのもののURLを指定する。
-
-## 定期実行方針
-
-推奨間隔:
+スクリーンショットとHTMLは `screenshots/` に保存される。
 
 ```text
-30分〜1時間
+screenshots/YYYYMMDD-HHMMSS-01-opened.png
+screenshots/YYYYMMDD-HHMMSS-02-filled.png
+screenshots/YYYYMMDD-HHMMSS-03-after-submit.png
 ```
 
-理由:
+HTML保存時、`.env` のユーザー名とパスワードはマスクされる。
 
-- 認証期限が短すぎるわけではない
-- 5分間隔は不要
-- 接続できている場合はログイン処理をしない
+## WSL / Linux セットアップ
 
-## Windows タスクスケジューラ案
+WSL / Linux で試す場合は以下を使う。
 
-WSL から実行する場合の例:
-
-```powershell
-wsl.exe -d Ubuntu -- bash -lc 'cd ~/src/github.com/nematatu/campus-captive-portal-auto-login && source ~/miniconda3/etc/profile.d/conda.sh && conda activate playwright && python captive_login.py'
+```bash
+chmod +x setup.sh
+./setup.sh
 ```
 
-実際の WSL 名、Conda パス、リポジトリパスに合わせて修正する。
+ただし、headed 実行は X server / DISPLAY に依存する。Windowsで見えるブラウザを起動したい場合は、WSLではなく `setup_windows.bat` と `run_windows.bat` を使う。
 
 ## 注意
 
-- `.env` をコミットしない
-- 認証情報をコードに直書きしない
-- スクリーンショットに情報が写る可能性があるため Git に入れない
-- CAPTCHA / MFA / OTP には対応しない
-- 利用前にネットワーク利用規程を確認する
-
-## TODO
-
-- [x] 認証ページ表示テスト
-- [x] セットアップスクリプト
-- [ ] `captive_login.py` 実装
-- [ ] ID / Password 自動入力
-- [ ] Dry Run モード
-- [ ] ログイン送信
-- [ ] 疎通確認
-- [ ] Windows タスクスケジューラ設定
+- `.env` をコミットしない。
+- 認証情報をコードに直書きしない。
+- スクリーンショットに情報が写る可能性があるため Git に入れない。
+- `.playwright-profile/` は Git に入れない。
+- CAPTCHA / MFA / OTP には対応しない。
+- 利用前にネットワーク利用規程を確認する。
