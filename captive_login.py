@@ -43,6 +43,7 @@ SCREENSHOT_DIR.mkdir(exist_ok=True)
 LOGIN_OK = "ok"
 LOGIN_INVALID_CREDENTIALS = "invalid_credentials"
 LOGIN_REQUIRED_PARAMETER = "required_parameter"
+LOGIN_FORM_NOT_FOUND = "form_not_found"
 
 
 def timestamp() -> str:
@@ -116,6 +117,19 @@ def fill_username(page) -> None:
 
 def fill_password(page) -> None:
     fill_field(page, PASSWORD_SELECTOR, PASSWORD, "パスワード")
+
+
+def has_login_form(page) -> bool:
+    form_count = page.locator("form").count()
+    username_count = page.locator(USERNAME_SELECTOR).count()
+    password_count = page.locator(PASSWORD_SELECTOR).count()
+    submit_count = page.locator(SUBMIT_SELECTOR).count()
+    log(
+        "ログインフォーム確認: "
+        f"form={form_count}, username={username_count}, "
+        f"password={password_count}, submit={submit_count}, current_url={page.url}"
+    )
+    return form_count > 0 and username_count > 0 and password_count > 0 and submit_count > 0
 
 
 def wait_submit_enabled(page) -> None:
@@ -302,6 +316,12 @@ def run_login(dry_run: bool, submit_mode: str) -> str:
 
             save_screenshot(page, SCREENSHOT_DIR / f"{ts}-01-opened.png")
 
+            if not has_login_form(page):
+                log("フォーム未検出: 認証フォームが見つかりません")
+                log("フォーム未検出: Captive Portal 検出URLが認証ページへリダイレクトされていない可能性があります")
+                log(f"最終URL: {page.url}")
+                return LOGIN_FORM_NOT_FOUND
+
             fill_username(page)
             fill_password(page)
             wait_submit_enabled(page)
@@ -381,6 +401,11 @@ def main() -> None:
 
     if login_result == LOGIN_REQUIRED_PARAMETER:
         log("フォームパラメータ不足")
+        log("処理終了")
+        return
+
+    if login_result == LOGIN_FORM_NOT_FOUND:
+        log("フォーム未検出")
         log("処理終了")
         return
 
