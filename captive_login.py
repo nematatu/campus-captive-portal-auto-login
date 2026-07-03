@@ -1,7 +1,9 @@
 import argparse
 import os
 import re
-import subprocess
+import sys
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import parse_qsl
@@ -38,7 +40,9 @@ USERNAME_SELECTOR = (os.getenv("USERNAME_SELECTOR") or DEFAULT_USERNAME_SELECTOR
 PASSWORD_SELECTOR = (os.getenv("PASSWORD_SELECTOR") or DEFAULT_PASSWORD_SELECTOR).strip()
 SUBMIT_SELECTOR = (os.getenv("SUBMIT_SELECTOR") or DEFAULT_SUBMIT_SELECTOR).strip()
 USER_AGENT = (os.getenv("BROWSER_USER_AGENT") or DEFAULT_USER_AGENT).strip()
-ACCEPT_LANGUAGE = (os.getenv("BROWSER_ACCEPT_LANGUAGE") or "ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7").strip()
+ACCEPT_LANGUAGE = (
+    os.getenv("BROWSER_ACCEPT_LANGUAGE") or "ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7"
+).strip()
 INVALID_CREDENTIALS_TEXT = (
     os.getenv("PORTAL_INVALID_CREDENTIALS_TEXT")
     or "ユーザー名またはパスワードが無効です"
@@ -87,27 +91,34 @@ def format_post_data(post_data: str | None) -> str:
 
 
 def check_online() -> bool:
+    """Return True only when CHECK_URL resolves to HTTP 204.
+
+    This intentionally uses Python's standard library instead of shelling out to
+    curl. The old implementation used /dev/null, which is Linux/WSL-specific and
+    breaks Windows-native execution.
+    """
+
     log(f"疎通確認開始: {CHECK_URL}")
+    request = urllib.request.Request(
+        CHECK_URL,
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept-Language": ACCEPT_LANGUAGE,
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+        },
+        method="GET",
+    )
+
     try:
-        result = subprocess.run(
-            [
-                "curl",
-                "-L",
-                "-s",
-                "-o",
-                "/dev/null",
-                "-w",
-                "%{http_code}",
-                CHECK_URL,
-            ],
-            timeout=10,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        status = result.stdout.strip()
-        log(f"疎通確認完了: HTTP {status or 'no response'}")
-        return status == "204"
+        with urllib.request.urlopen(request, timeout=10) as response:
+            status = response.getcode()
+            final_url = response.geturl()
+            log(f"疎通確認完了: HTTP {status}, final_url={final_url}")
+            return status == 204
+    except urllib.error.HTTPError as error:
+        log(f"疎通確認完了: HTTP {error.code}, final_url={error.url}")
+        return error.code == 204
     except Exception as error:
         log(f"疎通確認失敗: {error}")
         return False
@@ -141,7 +152,8 @@ def fill_field(page, selector: str, value: str, label: str, input_mode: str) -> 
         field.fill(value)
     elif input_mode == "type":
         field.click()
-        page.keyboard.press("Control+A")
+        modifier = "Meta" if sys.platform == "darwin" else "Control"
+        page.keyboard.press(f"{modifier}+A")
         page.keyboard.type(value, delay=50)
     else:
         raise RuntimeError(f"Unknown input mode: {input_mode}")
@@ -465,12 +477,13 @@ def run_login(
 
         def launch_context():
             if user_data_dir:
+                profile_dir = str(Path(user_data_dir))
                 launched_context = p.chromium.launch_persistent_context(
-                    user_data_dir=user_data_dir,
+                    user_data_dir=profile_dir,
                     **browser_options,
                     **context_options,
                 )
-                log(f"Chromium 永続プロファイル起動完了: user_data_dir={user_data_dir}")
+                log(f"Chromium 永続プロファイル起動完了: user_data_dir={profile_dir}")
                 return None, launched_context
 
             launched_browser = p.chromium.launch(**browser_options)
@@ -490,11 +503,12 @@ def run_login(
                 or "Target page, context or browser has been closed" in str(error)
             ):
                 log(f"headed 起動失敗: {error}")
-                log("X server が利用できないため、headless=True で再試行します")
+                log("画面表示が利用できないため、headless=True で再試行します")
                 browser_options["headless"] = True
                 browser, context = launch_context()
             else:
                 raise
+
         context.add_init_script(
             """
             Object.defineProperty(navigator, 'webdriver', {
@@ -577,10 +591,30 @@ def run_login(
             log("Chromium 終了完了")
 
 
+def apply_windows_manual_defaults(args: argparse.Namespace) -> None:
+    """Apply a Windows-native, visible-browser preset.
+
+    The preset is intentionally explicit so it can be used from run_windows.ps1
+    without requiring a long command line each time.
+    """
+
+    args.headed = True
+    args.browser_channel = args.browser_channel or "chrome"
+    args.user_data_dir = args.user_data_dir or ".playwright-profile"
+    args.submit_mode = "click"
+    args.input_mode = "type"
+    args.before_submit_wait_ms = max(args.before_submit_wait_ms, 5000)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="Fill the form but do not submit.")
     parser.add_argument("--force", action="store_true", help="Run login even if connectivity check succeeds.")
+    parser.add_argument(
+        "--windows-manual",
+        action="store_true",
+        help="Use Windows-native headed defaults: Chrome channel, persistent profile, click submit, type input.",
+    )
     parser.add_argument(
         "--submit-mode",
         choices=["click", "nwa", "form-submit"],
@@ -610,10 +644,13 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.windows_manual:
+        apply_windows_manual_defaults(args)
+
     log("処理開始")
     log(
         "mode: "
-        f"dry_run={args.dry_run}, force={args.force}, "
+        f"dry_run={args.dry_run}, force={args.force}, windows_manual={args.windows_manual}, "
         f"submit_mode={args.submit_mode}, input_mode={args.input_mode}, "
         f"before_submit_wait_ms={args.before_submit_wait_ms}, "
         f"headless={not args.headed}, browser_channel={args.browser_channel}, "
