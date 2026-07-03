@@ -97,26 +97,36 @@ def require_credentials() -> None:
     log("認証情報確認完了")
 
 
-def fill_field(page, selector: str, value: str, label: str) -> None:
-    log(f"{label}入力開始: selector={selector}")
+def fill_field(page, selector: str, value: str, label: str, input_mode: str) -> None:
+    log(f"{label}入力開始: selector={selector}, mode={input_mode}")
     locator = page.locator(selector)
     count = locator.count()
     log(f"{label}候補確認: count={count}")
     if count == 0:
         raise RuntimeError(f"{label} input was not found. selector={selector}")
 
-    locator.first.fill(value)
+    field = locator.first
+    if input_mode == "fill":
+        field.fill(value)
+    elif input_mode == "type":
+        field.click()
+        page.keyboard.press("Control+A")
+        page.keyboard.type(value, delay=50)
+    else:
+        raise RuntimeError(f"Unknown input mode: {input_mode}")
+
     locator.first.dispatch_event("input")
     locator.first.dispatch_event("change")
+    locator.first.evaluate("(el) => el.blur()")
     log(f"{label}入力完了")
 
 
-def fill_username(page) -> None:
-    fill_field(page, USERNAME_SELECTOR, USERNAME, "ユーザー名")
+def fill_username(page, input_mode: str) -> None:
+    fill_field(page, USERNAME_SELECTOR, USERNAME, "ユーザー名", input_mode)
 
 
-def fill_password(page) -> None:
-    fill_field(page, PASSWORD_SELECTOR, PASSWORD, "パスワード")
+def fill_password(page, input_mode: str) -> None:
+    fill_field(page, PASSWORD_SELECTOR, PASSWORD, "パスワード", input_mode)
 
 
 def has_login_form(page) -> bool:
@@ -291,7 +301,12 @@ def detect_login_failure(page) -> str | None:
     return None
 
 
-def run_login(dry_run: bool, submit_mode: str) -> str:
+def run_login(
+    dry_run: bool,
+    submit_mode: str,
+    input_mode: str,
+    before_submit_wait_ms: int,
+) -> str:
     require_credentials()
 
     ts = timestamp()
@@ -322,8 +337,8 @@ def run_login(dry_run: bool, submit_mode: str) -> str:
                 log(f"最終URL: {page.url}")
                 return LOGIN_FORM_NOT_FOUND
 
-            fill_username(page)
-            fill_password(page)
+            fill_username(page, input_mode=input_mode)
+            fill_password(page, input_mode=input_mode)
             wait_submit_enabled(page)
             save_screenshot(page, SCREENSHOT_DIR / f"{ts}-02-filled.png")
 
@@ -331,6 +346,11 @@ def run_login(dry_run: bool, submit_mode: str) -> str:
                 log("dry-run: ログイン送信せず終了")
                 log(f"最終URL: {page.url}")
                 return LOGIN_OK
+
+            if before_submit_wait_ms > 0:
+                log(f"送信前待機開始: {before_submit_wait_ms}ms")
+                page.wait_for_timeout(before_submit_wait_ms)
+                log(f"送信前待機完了: current_url={page.url}")
 
             log_before_submit_diagnostics(page)
             submit_login(page, submit_mode=submit_mode)
@@ -377,10 +397,27 @@ def main() -> None:
         default="nwa",
         help="Submit method. Default: nwa.",
     )
+    parser.add_argument(
+        "--input-mode",
+        choices=["fill", "type"],
+        default="type",
+        help="Input method. Default: type.",
+    )
+    parser.add_argument(
+        "--before-submit-wait-ms",
+        type=int,
+        default=1000,
+        help="Wait time after filling the form and before submitting. Default: 1000.",
+    )
     args = parser.parse_args()
 
     log("処理開始")
-    log(f"mode: dry_run={args.dry_run}, force={args.force}, submit_mode={args.submit_mode}")
+    log(
+        "mode: "
+        f"dry_run={args.dry_run}, force={args.force}, "
+        f"submit_mode={args.submit_mode}, input_mode={args.input_mode}, "
+        f"before_submit_wait_ms={args.before_submit_wait_ms}"
+    )
 
     online_before = check_online()
 
@@ -392,7 +429,12 @@ def main() -> None:
         log("注意: 実行前からオンライン。ログイン成功判定はできない")
 
     log("オフラインまたは強制実行: Captive Portal 認証処理を開始")
-    login_result = run_login(dry_run=args.dry_run, submit_mode=args.submit_mode)
+    login_result = run_login(
+        dry_run=args.dry_run,
+        submit_mode=args.submit_mode,
+        input_mode=args.input_mode,
+        before_submit_wait_ms=args.before_submit_wait_ms,
+    )
 
     if login_result == LOGIN_INVALID_CREDENTIALS:
         log("認証失敗")

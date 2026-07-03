@@ -172,6 +172,21 @@ python captive_login.py --submit-mode form-submit
 
 `--submit-mode nwa` がデフォルト。ページ内に `Nwa_SubmitForm` がある場合、`Nwa_SubmitForm(form.id, submit.id)` 経由で送信する。
 
+入力方法の指定:
+
+```bash
+python captive_login.py --input-mode type
+python captive_login.py --input-mode fill
+```
+
+`--input-mode type` がデフォルト。手動入力に近づけるため、キー入力イベントを発火させながら入力する。
+
+手動操作では成功するが自動実行で失敗する場合は、まず以下を試す。
+
+```bash
+python captive_login.py --force --submit-mode click --input-mode type --before-submit-wait-ms 3000
+```
+
 `required parameter unavailable` が出る場合は、送信直前ログに出る hidden input、form action / method、submit mode を確認する。
 
 `--force` は、実行前からオンラインの状態でもログイン処理を試すためのオプション。実行前からオンラインだった場合、実行後もオンラインであってもログイン成功とは判定しない。
