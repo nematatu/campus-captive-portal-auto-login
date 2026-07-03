@@ -195,6 +195,12 @@ WSL で画面表示できる場合は、headed 実行で実際の画面遷移を
 python captive_login.py --force --headed --submit-mode click --input-mode type --before-submit-wait-ms 3000
 ```
 
+`Missing X server or $DISPLAY` が出る場合、その WSL では headed 表示が使えない。`--headed` を外して headless で実行する。スクリプト側でも同エラー時は headless へ再試行する。
+
+```bash
+python captive_login.py --force --user-data-dir .playwright-profile --submit-mode click --input-mode type --before-submit-wait-ms 5000
+```
+
 Chrome が Playwright から利用できる環境では、Chrome チャンネルと永続プロファイルを指定して、手動ブラウザに近い状態で検証できる。
 
 ```bash

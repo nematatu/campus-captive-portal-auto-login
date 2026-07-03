@@ -415,34 +415,37 @@ def run_login(
             "timezone_id": "Asia/Tokyo",
             "extra_http_headers": {"Accept-Language": ACCEPT_LANGUAGE},
         }
-        try:
+
+        def launch_context():
             if user_data_dir:
-                context = p.chromium.launch_persistent_context(
+                launched_context = p.chromium.launch_persistent_context(
                     user_data_dir=user_data_dir,
                     **browser_options,
                     **context_options,
                 )
                 log(f"Chromium 永続プロファイル起動完了: user_data_dir={user_data_dir}")
-            else:
-                browser = p.chromium.launch(**browser_options)
-                log("Chromium 起動完了")
-                context = browser.new_context(**context_options)
+                return None, launched_context
+
+            launched_browser = p.chromium.launch(**browser_options)
+            log("Chromium 起動完了")
+            return launched_browser, launched_browser.new_context(**context_options)
+
+        try:
+            browser, context = launch_context()
         except PlaywrightError as error:
             if browser_channel and "Chromium distribution" in str(error):
                 log(f"Chrome チャンネル起動失敗: {error}")
                 log("Chrome チャンネルを使わず、Playwright bundled Chromium で再試行します")
                 browser_options.pop("channel", None)
-                if user_data_dir:
-                    context = p.chromium.launch_persistent_context(
-                        user_data_dir=user_data_dir,
-                        **browser_options,
-                        **context_options,
-                    )
-                    log(f"Chromium 永続プロファイル起動完了: user_data_dir={user_data_dir}")
-                else:
-                    browser = p.chromium.launch(**browser_options)
-                    log("Chromium 起動完了")
-                    context = browser.new_context(**context_options)
+                browser, context = launch_context()
+            elif not headless and (
+                "Missing X server" in str(error)
+                or "Target page, context or browser has been closed" in str(error)
+            ):
+                log(f"headed 起動失敗: {error}")
+                log("X server が利用できないため、headless=True で再試行します")
+                browser_options["headless"] = True
+                browser, context = launch_context()
             else:
                 raise
         context.add_init_script(
