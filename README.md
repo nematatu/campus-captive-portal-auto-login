@@ -106,6 +106,8 @@ PASSWORD_SELECTOR=input[name="password"]
 SUBMIT_SELECTOR=input[type="submit"]
 PORTAL_INVALID_CREDENTIALS_TEXT=ユーザー名またはパスワードが無効です
 PORTAL_REQUIRED_PARAMETER_TEXT=required parameter unavailable
+BROWSER_USER_AGENT=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36
+BROWSER_ACCEPT_LANGUAGE=ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7
 ```
 
 `.env` は Git に入れない。
@@ -186,6 +188,14 @@ python captive_login.py --input-mode fill
 ```bash
 python captive_login.py --force --submit-mode click --input-mode type --before-submit-wait-ms 3000
 ```
+
+WSL で画面表示できる場合は、headed 実行で実際の画面遷移を確認する。
+
+```bash
+python captive_login.py --force --headed --submit-mode click --input-mode type --before-submit-wait-ms 3000
+```
+
+スクリプトは通常のデスクトップ Chrome に近い User-Agent と `Accept-Language` を設定し、実行時に `navigator.userAgent` などのブラウザ診断ログを出す。手動ブラウザと差がある場合は、`.env` の `BROWSER_USER_AGENT` を手動ブラウザの値に合わせる。
 
 `required parameter unavailable` が出る場合は、送信直前ログに出る hidden input、form action / method、submit mode を確認する。
 

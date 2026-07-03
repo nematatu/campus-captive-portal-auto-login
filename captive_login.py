@@ -13,6 +13,11 @@ load_dotenv()
 DEFAULT_USERNAME_SELECTOR = 'input[name="user"]'
 DEFAULT_PASSWORD_SELECTOR = 'input[name="password"]'
 DEFAULT_SUBMIT_SELECTOR = 'input[type="submit"]'
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/126.0.0.0 Safari/537.36"
+)
 
 LOGIN_URL = os.getenv(
     "CAPTIVE_PORTAL_URL",
@@ -29,6 +34,8 @@ PASSWORD = os.getenv("CAPTIVE_PASSWORD", "")
 USERNAME_SELECTOR = (os.getenv("USERNAME_SELECTOR") or DEFAULT_USERNAME_SELECTOR).strip()
 PASSWORD_SELECTOR = (os.getenv("PASSWORD_SELECTOR") or DEFAULT_PASSWORD_SELECTOR).strip()
 SUBMIT_SELECTOR = (os.getenv("SUBMIT_SELECTOR") or DEFAULT_SUBMIT_SELECTOR).strip()
+USER_AGENT = (os.getenv("BROWSER_USER_AGENT") or DEFAULT_USER_AGENT).strip()
+ACCEPT_LANGUAGE = (os.getenv("BROWSER_ACCEPT_LANGUAGE") or "ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7").strip()
 INVALID_CREDENTIALS_TEXT = (
     os.getenv("PORTAL_INVALID_CREDENTIALS_TEXT")
     or "ユーザー名またはパスワードが無効です"
@@ -140,6 +147,30 @@ def has_login_form(page) -> bool:
         f"password={password_count}, submit={submit_count}, current_url={page.url}"
     )
     return form_count > 0 and username_count > 0 and password_count > 0 and submit_count > 0
+
+
+def log_browser_diagnostics(page) -> None:
+    diagnostics = page.evaluate(
+        """
+        () => ({
+          userAgent: navigator.userAgent,
+          language: navigator.language,
+          languages: navigator.languages,
+          webdriver: navigator.webdriver,
+          platform: navigator.platform,
+          cookieEnabled: navigator.cookieEnabled,
+        })
+        """
+    )
+    log(
+        "ブラウザ診断: "
+        f"userAgent={diagnostics['userAgent']!r}, "
+        f"language={diagnostics['language']!r}, "
+        f"languages={diagnostics['languages']!r}, "
+        f"webdriver={diagnostics['webdriver']}, "
+        f"platform={diagnostics['platform']!r}, "
+        f"cookieEnabled={diagnostics['cookieEnabled']}"
+    )
 
 
 def wait_submit_enabled(page) -> None:
@@ -306,6 +337,7 @@ def run_login(
     submit_mode: str,
     input_mode: str,
     before_submit_wait_ms: int,
+    headless: bool,
 ) -> str:
     require_credentials()
 
@@ -314,16 +346,31 @@ def run_login(
 
     with sync_playwright() as p:
         log("Chromium 起動開始")
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=headless)
         log("Chromium 起動完了")
 
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        context = browser.new_context(
+            viewport={"width": 1366, "height": 768},
+            user_agent=USER_AGENT,
+            locale="ja-JP",
+            timezone_id="Asia/Tokyo",
+            extra_http_headers={"Accept-Language": ACCEPT_LANGUAGE},
+        )
+        context.add_init_script(
+            """
+            Object.defineProperty(navigator, 'webdriver', {
+              get: () => undefined,
+            });
+            """
+        )
+        page = context.new_page()
         log("新規ページ作成完了")
 
         try:
             log(f"認証ページ遷移開始: {LOGIN_URL}")
             page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=30_000)
             log(f"認証ページ遷移完了: {page.url}")
+            log_browser_diagnostics(page)
 
             log("JSリダイレクト・描画待機開始: 5秒")
             page.wait_for_timeout(5_000)
@@ -383,6 +430,7 @@ def run_login(
             raise error
         finally:
             log("Chromium 終了開始")
+            context.close()
             browser.close()
             log("Chromium 終了完了")
 
@@ -409,6 +457,7 @@ def main() -> None:
         default=1000,
         help="Wait time after filling the form and before submitting. Default: 1000.",
     )
+    parser.add_argument("--headed", action="store_true", help="Run Chromium with a visible window.")
     args = parser.parse_args()
 
     log("処理開始")
@@ -416,7 +465,8 @@ def main() -> None:
         "mode: "
         f"dry_run={args.dry_run}, force={args.force}, "
         f"submit_mode={args.submit_mode}, input_mode={args.input_mode}, "
-        f"before_submit_wait_ms={args.before_submit_wait_ms}"
+        f"before_submit_wait_ms={args.before_submit_wait_ms}, "
+        f"headless={not args.headed}"
     )
 
     online_before = check_online()
@@ -434,6 +484,7 @@ def main() -> None:
         submit_mode=args.submit_mode,
         input_mode=args.input_mode,
         before_submit_wait_ms=args.before_submit_wait_ms,
+        headless=not args.headed,
     )
 
     if login_result == LOGIN_INVALID_CREDENTIALS:
