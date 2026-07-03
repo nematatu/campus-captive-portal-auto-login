@@ -3,6 +3,7 @@ import os
 import subprocess
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import parse_qsl
 
 from dotenv import load_dotenv
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -60,6 +61,27 @@ def timestamp() -> str:
 def log(message: str) -> None:
     now = datetime.now().strftime("%H:%M:%S")
     print(f"[{now}] {message}", flush=True)
+
+
+def mask_sensitive_value(name: str, value: str) -> str:
+    lowered = name.lower()
+    if lowered in {"user", "username", "login", "id"}:
+        return f"<masked length={len(value)}>"
+    if "pass" in lowered or "password" in lowered:
+        return f"<masked length={len(value)}>"
+    return value
+
+
+def format_post_data(post_data: str | None) -> str:
+    if not post_data:
+        return ""
+    pairs = parse_qsl(post_data, keep_blank_values=True)
+    if not pairs:
+        return post_data[:500]
+    masked_pairs = [
+        f"{name}={mask_sensitive_value(name, value)!r}" for name, value in pairs
+    ]
+    return "&".join(masked_pairs)
 
 
 def check_online() -> bool:
@@ -171,6 +193,34 @@ def log_browser_diagnostics(page) -> None:
         f"platform={diagnostics['platform']!r}, "
         f"cookieEnabled={diagnostics['cookieEnabled']}"
     )
+
+
+def log_cookies(context, label: str) -> None:
+    cookies = context.cookies()
+    log(f"{label}: cookie count={len(cookies)}")
+    for index, cookie in enumerate(cookies, start=1):
+        log(
+            f"{label}: cookie[{index}] "
+            f"name={cookie.get('name')!r}, domain={cookie.get('domain')!r}, "
+            f"path={cookie.get('path')!r}, value_present={bool(cookie.get('value'))}"
+        )
+
+
+def setup_network_logging(page) -> None:
+    def on_request(request) -> None:
+        if request.is_navigation_request() or request.method == "POST":
+            log(f"通信診断: request method={request.method}, url={request.url}")
+            post_data = format_post_data(request.post_data)
+            if post_data:
+                log(f"通信診断: request post_data={post_data}")
+
+    def on_response(response) -> None:
+        request = response.request
+        if request.is_navigation_request() or request.method == "POST":
+            log(f"通信診断: response status={response.status}, url={response.url}")
+
+    page.on("request", on_request)
+    page.on("response", on_response)
 
 
 def wait_submit_enabled(page) -> None:
@@ -321,6 +371,11 @@ def save_screenshot(page, path: Path) -> None:
     log(f"スクリーンショット保存完了: {path}")
 
 
+def save_html(page, path: Path) -> None:
+    path.write_text(page.content(), encoding="utf-8")
+    log(f"HTML保存完了: {path}")
+
+
 def detect_login_failure(page) -> str | None:
     body_text = page.evaluate(
         "() => document.body ? document.body.innerText : document.documentElement.innerText"
@@ -338,6 +393,8 @@ def run_login(
     input_mode: str,
     before_submit_wait_ms: int,
     headless: bool,
+    browser_channel: str | None,
+    user_data_dir: str | None,
 ) -> str:
     require_credentials()
 
@@ -346,16 +403,28 @@ def run_login(
 
     with sync_playwright() as p:
         log("Chromium 起動開始")
-        browser = p.chromium.launch(headless=headless)
-        log("Chromium 起動完了")
-
-        context = browser.new_context(
-            viewport={"width": 1366, "height": 768},
-            user_agent=USER_AGENT,
-            locale="ja-JP",
-            timezone_id="Asia/Tokyo",
-            extra_http_headers={"Accept-Language": ACCEPT_LANGUAGE},
-        )
+        browser = None
+        browser_options = {"headless": headless}
+        if browser_channel:
+            browser_options["channel"] = browser_channel
+        context_options = {
+            "viewport": {"width": 1366, "height": 768},
+            "user_agent": USER_AGENT,
+            "locale": "ja-JP",
+            "timezone_id": "Asia/Tokyo",
+            "extra_http_headers": {"Accept-Language": ACCEPT_LANGUAGE},
+        }
+        if user_data_dir:
+            context = p.chromium.launch_persistent_context(
+                user_data_dir=user_data_dir,
+                **browser_options,
+                **context_options,
+            )
+            log(f"Chromium 永続プロファイル起動完了: user_data_dir={user_data_dir}")
+        else:
+            browser = p.chromium.launch(**browser_options)
+            log("Chromium 起動完了")
+            context = browser.new_context(**context_options)
         context.add_init_script(
             """
             Object.defineProperty(navigator, 'webdriver', {
@@ -364,6 +433,7 @@ def run_login(
             """
         )
         page = context.new_page()
+        setup_network_logging(page)
         log("新規ページ作成完了")
 
         try:
@@ -377,6 +447,8 @@ def run_login(
             log(f"待機完了: current_url={page.url}")
 
             save_screenshot(page, SCREENSHOT_DIR / f"{ts}-01-opened.png")
+            save_html(page, SCREENSHOT_DIR / f"{ts}-01-opened.html")
+            log_cookies(context, "Cookie診断: opened")
 
             if not has_login_form(page):
                 log("フォーム未検出: 認証フォームが見つかりません")
@@ -388,6 +460,8 @@ def run_login(
             fill_password(page, input_mode=input_mode)
             wait_submit_enabled(page)
             save_screenshot(page, SCREENSHOT_DIR / f"{ts}-02-filled.png")
+            save_html(page, SCREENSHOT_DIR / f"{ts}-02-filled.html")
+            log_cookies(context, "Cookie診断: filled")
 
             if dry_run:
                 log("dry-run: ログイン送信せず終了")
@@ -400,6 +474,7 @@ def run_login(
                 log(f"送信前待機完了: current_url={page.url}")
 
             log_before_submit_diagnostics(page)
+            log_cookies(context, "Cookie診断: before-submit")
             submit_login(page, submit_mode=submit_mode)
 
             log("ログイン後待機開始: 10秒")
@@ -407,6 +482,8 @@ def run_login(
             log(f"ログイン後待機完了: current_url={page.url}")
 
             save_screenshot(page, SCREENSHOT_DIR / f"{ts}-03-after-submit.png")
+            save_html(page, SCREENSHOT_DIR / f"{ts}-03-after-submit.html")
+            log_cookies(context, "Cookie診断: after-submit")
             login_failure = detect_login_failure(page)
             if login_failure == LOGIN_INVALID_CREDENTIALS:
                 log("認証失敗: 認証情報エラーを検出")
@@ -431,7 +508,8 @@ def run_login(
         finally:
             log("Chromium 終了開始")
             context.close()
-            browser.close()
+            if browser:
+                browser.close()
             log("Chromium 終了完了")
 
 
@@ -458,6 +536,8 @@ def main() -> None:
         help="Wait time after filling the form and before submitting. Default: 1000.",
     )
     parser.add_argument("--headed", action="store_true", help="Run Chromium with a visible window.")
+    parser.add_argument("--browser-channel", help="Playwright browser channel, for example chrome.")
+    parser.add_argument("--user-data-dir", help="Persistent Chromium profile directory.")
     args = parser.parse_args()
 
     log("処理開始")
@@ -466,7 +546,8 @@ def main() -> None:
         f"dry_run={args.dry_run}, force={args.force}, "
         f"submit_mode={args.submit_mode}, input_mode={args.input_mode}, "
         f"before_submit_wait_ms={args.before_submit_wait_ms}, "
-        f"headless={not args.headed}"
+        f"headless={not args.headed}, browser_channel={args.browser_channel}, "
+        f"user_data_dir={args.user_data_dir}"
     )
 
     online_before = check_online()
@@ -485,6 +566,8 @@ def main() -> None:
         input_mode=args.input_mode,
         before_submit_wait_ms=args.before_submit_wait_ms,
         headless=not args.headed,
+        browser_channel=args.browser_channel,
+        user_data_dir=args.user_data_dir,
     )
 
     if login_result == LOGIN_INVALID_CREDENTIALS:

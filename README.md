@@ -195,9 +195,15 @@ WSL で画面表示できる場合は、headed 実行で実際の画面遷移を
 python captive_login.py --force --headed --submit-mode click --input-mode type --before-submit-wait-ms 3000
 ```
 
+Chrome が Playwright から利用できる環境では、Chrome チャンネルと永続プロファイルを指定して、手動ブラウザに近い状態で検証できる。
+
+```bash
+python captive_login.py --force --headed --browser-channel chrome --user-data-dir .playwright-profile --submit-mode click --input-mode type --before-submit-wait-ms 5000
+```
+
 スクリプトは通常のデスクトップ Chrome に近い User-Agent と `Accept-Language` を設定し、実行時に `navigator.userAgent` などのブラウザ診断ログを出す。手動ブラウザと差がある場合は、`.env` の `BROWSER_USER_AGENT` を手動ブラウザの値に合わせる。
 
-`required parameter unavailable` が出る場合は、送信直前ログに出る hidden input、form action / method、submit mode を確認する。
+`required parameter unavailable` が出る場合は、送信直前ログに出る hidden input、form action / method、submit mode に加えて、`通信診断` の request URL / POST data、`Cookie診断`、`screenshots/*-filled.html` と `screenshots/*-after-submit.html` を確認する。POST data の ID / password 相当の値はログ上でマスクされる。
 
 `--force` は、実行前からオンラインの状態でもログイン処理を試すためのオプション。実行前からオンラインだった場合、実行後もオンラインであってもログイン成功とは判定しない。
 
