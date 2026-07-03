@@ -135,7 +135,7 @@ def save_screenshot(page, path: Path) -> None:
     log(f"スクリーンショット保存完了: {path}")
 
 
-def run_login(dry_run: bool) -> None:
+def run_login(dry_run: bool) -> bool:
     require_credentials()
 
     ts = timestamp()
@@ -168,7 +168,7 @@ def run_login(dry_run: bool) -> None:
             if dry_run:
                 log("dry-run: ログイン送信せず終了")
                 log(f"最終URL: {page.url}")
-                return
+                return True
 
             click_submit(page)
 
@@ -177,7 +177,12 @@ def run_login(dry_run: bool) -> None:
             log(f"ログイン後待機完了: current_url={page.url}")
 
             save_screenshot(page, SCREENSHOT_DIR / f"{ts}-03-after-submit.png")
+            if page.locator("text=ユーザー名またはパスワードが無効です").count() > 0:
+                log("失敗: 認証エラーを検出")
+                return False
+
             log(f"最終URL: {page.url}")
+            return True
 
         except PlaywrightTimeoutError as error:
             error_path = SCREENSHOT_DIR / f"{ts}-error-timeout.png"
@@ -214,7 +219,12 @@ def main() -> None:
         log("注意: 実行前からオンライン。ログイン成功判定はできない")
 
     log("オフラインまたは強制実行: Captive Portal 認証処理を開始")
-    run_login(dry_run=args.dry_run)
+    login_result = run_login(dry_run=args.dry_run)
+
+    if not login_result:
+        log("失敗: 認証エラーを検出")
+        log("処理終了")
+        return
 
     if args.dry_run:
         log("処理終了: dry-run")
