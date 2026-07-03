@@ -152,6 +152,8 @@ ID / Password 入力
 python captive_login.py
 ```
 
+デフォルトでは `--entry-mode detect-first` として、ブラウザで `CHECK_URL` を開いて Captive Portal リダイレクトを先に試す。ログインフォームが検出できない場合だけ `CAPTIVE_PORTAL_URL` へフォールバックする。直接フォームURLを開くと、環境によってはサーバ側で必要な接続元パラメータが不足することがある。
+
 送信なしの確認:
 
 ```bash

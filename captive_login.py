@@ -1,5 +1,6 @@
 import argparse
 import os
+import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -224,6 +225,29 @@ def setup_network_logging(page) -> None:
     page.on("response", on_response)
 
 
+def open_login_page(page, entry_mode: str) -> None:
+    if entry_mode == "detect-first":
+        log(f"Captive Portal 検出URL遷移開始: {CHECK_URL}")
+        page.goto(CHECK_URL, wait_until="domcontentloaded", timeout=30_000)
+        log(f"Captive Portal 検出URL遷移完了: {page.url}")
+        log("検出URL後待機開始: 5秒")
+        page.wait_for_timeout(5_000)
+        log(f"検出URL後待機完了: current_url={page.url}")
+        if has_login_form(page):
+            log("Captive Portal 検出URLからログインフォームを検出")
+            return
+        log("Captive Portal 検出URLではログインフォーム未検出。直接認証URLへフォールバックします")
+    elif entry_mode != "direct":
+        raise RuntimeError(f"Unknown entry mode: {entry_mode}")
+
+    log(f"認証ページ遷移開始: {LOGIN_URL}")
+    page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=30_000)
+    log(f"認証ページ遷移完了: {page.url}")
+    log("JSリダイレクト・描画待機開始: 5秒")
+    page.wait_for_timeout(5_000)
+    log(f"待機完了: current_url={page.url}")
+
+
 def wait_submit_enabled(page) -> None:
     log(f"ログインボタン有効化待機開始: selector={SUBMIT_SELECTOR}")
     page.locator(SUBMIT_SELECTOR).first.wait_for(state="attached", timeout=10_000)
@@ -373,7 +397,23 @@ def save_screenshot(page, path: Path) -> None:
 
 
 def save_html(page, path: Path) -> None:
-    path.write_text(page.content(), encoding="utf-8")
+    content = page.content()
+    for secret in (USERNAME, PASSWORD):
+        if secret:
+            content = content.replace(secret, f"<masked length={len(secret)}>")
+    content = re.sub(
+        r'(<input[^>]+name=["\']password["\'][^>]*value=["\'])[^"\']*(["\'])',
+        r"\1<masked>\2",
+        content,
+        flags=re.IGNORECASE,
+    )
+    content = re.sub(
+        r'(<input[^>]+name=["\']user["\'][^>]*value=["\'])[^"\']*(["\'])',
+        r"\1<masked>\2",
+        content,
+        flags=re.IGNORECASE,
+    )
+    path.write_text(content, encoding="utf-8")
     log(f"HTML保存完了: {path}")
 
 
@@ -396,6 +436,7 @@ def run_login(
     headless: bool,
     browser_channel: str | None,
     user_data_dir: str | None,
+    entry_mode: str,
 ) -> str:
     require_credentials()
 
@@ -460,14 +501,8 @@ def run_login(
         log("新規ページ作成完了")
 
         try:
-            log(f"認証ページ遷移開始: {LOGIN_URL}")
-            page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=30_000)
-            log(f"認証ページ遷移完了: {page.url}")
+            open_login_page(page, entry_mode=entry_mode)
             log_browser_diagnostics(page)
-
-            log("JSリダイレクト・描画待機開始: 5秒")
-            page.wait_for_timeout(5_000)
-            log(f"待機完了: current_url={page.url}")
 
             save_screenshot(page, SCREENSHOT_DIR / f"{ts}-01-opened.png")
             save_html(page, SCREENSHOT_DIR / f"{ts}-01-opened.html")
@@ -561,6 +596,12 @@ def main() -> None:
     parser.add_argument("--headed", action="store_true", help="Run Chromium with a visible window.")
     parser.add_argument("--browser-channel", help="Playwright browser channel, for example chrome.")
     parser.add_argument("--user-data-dir", help="Persistent Chromium profile directory.")
+    parser.add_argument(
+        "--entry-mode",
+        choices=["detect-first", "direct"],
+        default="detect-first",
+        help="Open CHECK_URL first to follow Captive Portal redirect, or open CAPTIVE_PORTAL_URL directly. Default: detect-first.",
+    )
     args = parser.parse_args()
 
     log("処理開始")
@@ -570,7 +611,7 @@ def main() -> None:
         f"submit_mode={args.submit_mode}, input_mode={args.input_mode}, "
         f"before_submit_wait_ms={args.before_submit_wait_ms}, "
         f"headless={not args.headed}, browser_channel={args.browser_channel}, "
-        f"user_data_dir={args.user_data_dir}"
+        f"user_data_dir={args.user_data_dir}, entry_mode={args.entry_mode}"
     )
 
     online_before = check_online()
@@ -591,6 +632,7 @@ def main() -> None:
         headless=not args.headed,
         browser_channel=args.browser_channel,
         user_data_dir=args.user_data_dir,
+        entry_mode=args.entry_mode,
     )
 
     if login_result == LOGIN_INVALID_CREDENTIALS:
