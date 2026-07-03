@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local config
+.env
+
+# Runtime outputs
+logs/
+screenshots/
+*.png
+*.log
