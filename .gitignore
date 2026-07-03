@@ -7,6 +7,9 @@ venv/
 # Local config
 .env
 
+# Playwright persistent browser profile
+.playwright-profile/
+
 # Runtime outputs
 logs/
 screenshots/
