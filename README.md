@@ -201,6 +201,12 @@ Chrome が Playwright から利用できる環境では、Chrome チャンネル
 python captive_login.py --force --headed --browser-channel chrome --user-data-dir .playwright-profile --submit-mode click --input-mode type --before-submit-wait-ms 5000
 ```
 
+`Chromium distribution 'chrome' is not found` が出る場合は、`--browser-channel chrome` を外す。スクリプト側でも同エラー時は bundled Chromium へ再試行する。
+
+```bash
+python captive_login.py --force --headed --user-data-dir .playwright-profile --submit-mode click --input-mode type --before-submit-wait-ms 5000
+```
+
 スクリプトは通常のデスクトップ Chrome に近い User-Agent と `Accept-Language` を設定し、実行時に `navigator.userAgent` などのブラウザ診断ログを出す。手動ブラウザと差がある場合は、`.env` の `BROWSER_USER_AGENT` を手動ブラウザの値に合わせる。
 
 `required parameter unavailable` が出る場合は、送信直前ログに出る hidden input、form action / method、submit mode に加えて、`通信診断` の request URL / POST data、`Cookie診断`、`screenshots/*-filled.html` と `screenshots/*-after-submit.html` を確認する。POST data の ID / password 相当の値はログ上でマスクされる。
