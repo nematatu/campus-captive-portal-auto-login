@@ -10,6 +10,10 @@ from playwright.sync_api import sync_playwright
 
 load_dotenv()
 
+DEFAULT_USERNAME_SELECTOR = 'input[name="user"]'
+DEFAULT_PASSWORD_SELECTOR = 'input[name="password"]'
+DEFAULT_SUBMIT_SELECTOR = 'input[type="submit"]'
+
 LOGIN_URL = os.getenv(
     "CAPTIVE_PORTAL_URL",
     "http://cpauth.cc.miyazaki-u.ac.jp/guest/cp-login.php",
@@ -22,9 +26,9 @@ CHECK_URL = os.getenv(
 USERNAME = os.getenv("CAPTIVE_USERNAME", "")
 PASSWORD = os.getenv("CAPTIVE_PASSWORD", "")
 
-USERNAME_SELECTOR = os.getenv("USERNAME_SELECTOR", "#ID_formea049c70_weblogin_user").strip()
-PASSWORD_SELECTOR = os.getenv("PASSWORD_SELECTOR", "#ID_formea049c70_weblogin_password").strip()
-SUBMIT_SELECTOR = os.getenv("SUBMIT_SELECTOR", "#ID_formea049c70_weblogin_submit").strip()
+USERNAME_SELECTOR = (os.getenv("USERNAME_SELECTOR") or DEFAULT_USERNAME_SELECTOR).strip()
+PASSWORD_SELECTOR = (os.getenv("PASSWORD_SELECTOR") or DEFAULT_PASSWORD_SELECTOR).strip()
+SUBMIT_SELECTOR = (os.getenv("SUBMIT_SELECTOR") or DEFAULT_SUBMIT_SELECTOR).strip()
 
 SCREENSHOT_DIR = Path("screenshots")
 SCREENSHOT_DIR.mkdir(exist_ok=True)
@@ -105,9 +109,7 @@ def fill_password(page) -> None:
 
 def wait_submit_enabled(page) -> None:
     log(f"ログインボタン有効化待機開始: selector={SUBMIT_SELECTOR}")
-    submit = page.locator(SUBMIT_SELECTOR).first
-    submit.wait_for(state="attached", timeout=10_000)
-
+    page.locator(SUBMIT_SELECTOR).first.wait_for(state="attached", timeout=10_000)
     page.wait_for_function(
         """
         (selector) => {
@@ -202,9 +204,14 @@ def main() -> None:
     log("処理開始")
     log(f"mode: dry_run={args.dry_run}, force={args.force}")
 
-    if not args.force and check_online():
+    online_before = check_online()
+
+    if online_before and not args.force:
         log("オンライン判定: すでに接続済み。処理終了")
         return
+
+    if online_before and args.force:
+        log("注意: 実行前からオンライン。ログイン成功判定はできない")
 
     log("オフラインまたは強制実行: Captive Portal 認証処理を開始")
     run_login(dry_run=args.dry_run)
@@ -213,8 +220,12 @@ def main() -> None:
         log("処理終了: dry-run")
         return
 
-    if check_online():
-        log("成功: インターネット接続が復旧")
+    online_after = check_online()
+
+    if not online_before and online_after:
+        log("成功: オフライン状態からインターネット接続が復旧")
+    elif online_before and online_after:
+        log("疎通OK: ただし実行前からオンラインのため、ログイン成功とは判定しない")
     else:
         log("失敗: ログイン試行後も疎通確認に失敗")
 
