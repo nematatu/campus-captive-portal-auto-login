@@ -22,9 +22,9 @@ CHECK_URL = os.getenv(
 USERNAME = os.getenv("CAPTIVE_USERNAME", "")
 PASSWORD = os.getenv("CAPTIVE_PASSWORD", "")
 
-USERNAME_SELECTOR = os.getenv("USERNAME_SELECTOR", "").strip()
-PASSWORD_SELECTOR = os.getenv("PASSWORD_SELECTOR", 'input[type="password"]').strip()
-SUBMIT_SELECTOR = os.getenv("SUBMIT_SELECTOR", "").strip()
+USERNAME_SELECTOR = os.getenv("USERNAME_SELECTOR", "#ID_formea049c70_weblogin_user").strip()
+PASSWORD_SELECTOR = os.getenv("PASSWORD_SELECTOR", "#ID_formea049c70_weblogin_password").strip()
+SUBMIT_SELECTOR = os.getenv("SUBMIT_SELECTOR", "#ID_formea049c70_weblogin_submit").strip()
 
 SCREENSHOT_DIR = Path("screenshots")
 SCREENSHOT_DIR.mkdir(exist_ok=True)
@@ -81,69 +81,51 @@ def require_credentials() -> None:
     log("認証情報確認完了")
 
 
+def fill_field(page, selector: str, value: str, label: str) -> None:
+    log(f"{label}入力開始: selector={selector}")
+    locator = page.locator(selector)
+    count = locator.count()
+    log(f"{label}候補確認: count={count}")
+    if count == 0:
+        raise RuntimeError(f"{label} input was not found. selector={selector}")
+
+    locator.first.fill(value)
+    locator.first.dispatch_event("input")
+    locator.first.dispatch_event("change")
+    log(f"{label}入力完了")
+
+
 def fill_username(page) -> None:
-    log("ユーザー名入力開始")
-    if USERNAME_SELECTOR:
-        page.locator(USERNAME_SELECTOR).first.fill(USERNAME)
-        log(f"ユーザー名入力完了: selector={USERNAME_SELECTOR}")
-        return
-
-    candidates = [
-        'input[name*="user" i]',
-        'input[name*="id" i]',
-        'input[name*="login" i]',
-        'input[type="text"]',
-        'input:not([type])',
-    ]
-
-    for selector in candidates:
-        locator = page.locator(selector)
-        count = locator.count()
-        log(f"ユーザー名候補確認: selector={selector}, count={count}")
-        if count > 0:
-            locator.first.fill(USERNAME)
-            log(f"ユーザー名入力完了: selector={selector}")
-            return
-
-    raise RuntimeError("Username input was not found. Set USERNAME_SELECTOR in .env.")
+    fill_field(page, USERNAME_SELECTOR, USERNAME, "ユーザー名")
 
 
 def fill_password(page) -> None:
-    log("パスワード入力開始")
-    locator = page.locator(PASSWORD_SELECTOR)
-    count = locator.count()
-    log(f"パスワード候補確認: selector={PASSWORD_SELECTOR}, count={count}")
-    if count == 0:
-        raise RuntimeError("Password input was not found. Set PASSWORD_SELECTOR in .env.")
-    locator.first.fill(PASSWORD)
-    log(f"パスワード入力完了: selector={PASSWORD_SELECTOR}")
+    fill_field(page, PASSWORD_SELECTOR, PASSWORD, "パスワード")
+
+
+def wait_submit_enabled(page) -> None:
+    log(f"ログインボタン有効化待機開始: selector={SUBMIT_SELECTOR}")
+    submit = page.locator(SUBMIT_SELECTOR).first
+    submit.wait_for(state="attached", timeout=10_000)
+
+    page.wait_for_function(
+        """
+        (selector) => {
+          const el = document.querySelector(selector);
+          return !!el && !el.disabled;
+        }
+        """,
+        arg=SUBMIT_SELECTOR,
+        timeout=10_000,
+    )
+    log("ログインボタン有効化確認完了")
 
 
 def click_submit(page) -> None:
     log("ログインボタン押下開始")
-    if SUBMIT_SELECTOR:
-        page.locator(SUBMIT_SELECTOR).first.click()
-        log(f"ログインボタン押下完了: selector={SUBMIT_SELECTOR}")
-        return
-
-    candidates = [
-        'input[type="submit"]',
-        'button[type="submit"]',
-        'button:has-text("ログイン")',
-        'input[value*="ログイン"]',
-        'button',
-    ]
-
-    for selector in candidates:
-        locator = page.locator(selector)
-        count = locator.count()
-        log(f"ログインボタン候補確認: selector={selector}, count={count}")
-        if count > 0:
-            locator.first.click()
-            log(f"ログインボタン押下完了: selector={selector}")
-            return
-
-    raise RuntimeError("Submit button was not found. Set SUBMIT_SELECTOR in .env.")
+    wait_submit_enabled(page)
+    page.locator(SUBMIT_SELECTOR).first.click()
+    log(f"ログインボタン押下完了: selector={SUBMIT_SELECTOR}")
 
 
 def save_screenshot(page, path: Path) -> None:
@@ -178,6 +160,7 @@ def run_login(dry_run: bool) -> None:
 
             fill_username(page)
             fill_password(page)
+            wait_submit_enabled(page)
             save_screenshot(page, SCREENSHOT_DIR / f"{ts}-02-filled.png")
 
             if dry_run:
