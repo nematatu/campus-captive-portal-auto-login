@@ -32,7 +32,15 @@ Playwright Chrome:
   通常の起動方式
 ```
 
-そのため、Playwright での完全自動ログインだけに寄せず、通常 Chrome をそのまま開く経路を追加しています。
+そのため、Playwright での完全自動ログインだけに寄せず、通常 Chrome をそのまま開く経路を使います。
+
+## 重要
+
+`CAPTIVE_PORTAL_URL` を直接開く運用はしません。
+
+Captive Portal は、通常の HTTP ページにアクセスしたときに、必要なパラメータ付きの認証URLへリダイレクトする場合があります。直接 `cp-login.php` を開くと、不完全なセッションやCookieが通常Chromeに残る可能性があります。
+
+通常Chromeでログインできなくなった場合は、`RECOVERY.md` を見て、Chromeの該当サイトデータを削除してください。
 
 ## Windows セットアップ
 
@@ -80,24 +88,17 @@ BROWSER_ACCEPT_LANGUAGE=ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7
 
 Playwright Chrome ではなく、Windows に入っている通常 Chrome をそのまま起動します。
 
-まず、通常HTTP入口を開きます。
-
 ```bat
 run_regular_chrome.bat
 ```
 
-ログイン画面が表示されない場合は、直接ポータルURLを開きます。
-
-```bat
-run_regular_chrome_direct.bat
-```
-
-これらは `open_regular_chrome.py` を呼び出します。
+これは `CAPTIVE_ENTRY_URL` を通常Chromeで開きます。
 
 ```text
 Playwright を使わない
 別プロファイルを作らない
 Chrome を通常起動する
+直接ポータルURLは開かない
 ```
 
 ## Playwright で実行
@@ -134,28 +135,28 @@ run_windows.bat force portal-flow auto human
 run_regular_chrome.bat
 ```
 
-ログイン画面が出なければ次です。
+これでログイン画面が出ない場合、`CAPTIVE_ENTRY_URL` を別の HTTP URL に変更して再実行します。
 
-```bat
-run_regular_chrome_direct.bat
+候補:
+
+```env
+CAPTIVE_ENTRY_URL=http://example.com/
 ```
 
-これで手動ログインできるなら、Playwright 起動 Chrome の問題です。
+または:
 
-次に Playwright 側を比較します。
-
-```bat
-run_human.bat
+```env
+CAPTIVE_ENTRY_URL=http://httpforever.com/
 ```
 
-まだ `required parameter unavailable` が出る場合、Playwright Chrome 経路は一旦捨ててください。
+直接ポータルURLを通常Chromeで開くbatは削除済みです。
 
 ## entry-mode
 
 ```text
 portal-flow  通常HTTPページから Captive Portal リダイレクトを踏む。既定値。
 detect-first CHECK_URL からリダイレクト検出を試し、だめなら直接URLへフォールバック。
-direct       CAPTIVE_PORTAL_URL を直接開く。required parameter unavailable が出やすい。
+direct       CAPTIVE_PORTAL_URL を直接開く。通常運用では使わない。
 ```
 
 ## submit-mode
