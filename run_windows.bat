@@ -1,3 +1,3 @@
 @echo off
 cd /d "%~dp0"
-.venv\Scripts\python.exe captive_login.py --windows-manual %*
+.venv\Scripts\python.exe manual_login_windows.py %*
