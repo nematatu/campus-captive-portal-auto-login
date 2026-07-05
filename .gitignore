@@ -7,8 +7,9 @@ venv/
 # Local config
 .env
 
-# Playwright persistent browser profile
+# Playwright persistent browser profiles
 .playwright-profile/
+.playwright-url-resolver-profile/
 
 # Runtime outputs
 logs/

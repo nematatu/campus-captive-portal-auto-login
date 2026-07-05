@@ -1,3 +1,17 @@
 @echo off
 cd /d "%~dp0"
-.venv\Scripts\python.exe captive_login.py --windows-manual %*
+
+if not exist .venv\Scripts\python.exe (
+  echo .venv was not found. Running setup_windows.bat...
+  call setup_windows.bat
+  if errorlevel 1 exit /b %errorlevel%
+)
+
+.venv\Scripts\python.exe -c "import pyautogui, pygetwindow" >nul 2>nul
+if errorlevel 1 (
+  echo Installing GUI automation dependencies...
+  .venv\Scripts\python.exe -m pip install -r requirements.txt
+  if errorlevel 1 exit /b %errorlevel%
+)
+
+.venv\Scripts\python.exe auto_type_real_browser_windows.py %*

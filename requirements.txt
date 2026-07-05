@@ -1,2 +1,5 @@
 playwright>=1.45.0
 python-dotenv>=1.0.1
+pyautogui>=0.9.54
+pygetwindow>=0.0.9
+pywinauto>=0.6.8

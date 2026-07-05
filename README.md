@@ -1,6 +1,6 @@
 # Campus Captive Portal Auto Login
 
-大学ネットワークの Captive Portal 認証を、Playwright で自動化するためのリポジトリ。
+大学ネットワークの Captive Portal 認証を補助するためのリポジトリ。
 
 ## 目的
 
@@ -12,17 +12,25 @@
 - Tailscale 切断
 - SSH 不可
 
-そのため、PC 自身が認証状態を確認し、必要なら Captive Portal 認証を実行する。
+そのため、PC 自身で認証ページを開き、ブラウザ上でログインできる状態にする。
 
-## 今回の方針
+## 現在の方針
 
-WSL ではなく、Windows ネイティブの Python から実行する。
+Playwright 管理下の Chrome でログイン送信すると、手動クリックでも `required parameter unavailable` が出るケースがある。
 
-理由:
+一方で、Playwright で得られた `final_url` を通常の Windows ブラウザで開き、そこでログインすると成功する。
 
-- WSL の headed 実行は X server / DISPLAY に依存する。
-- 今回は、実際に見えるブラウザを起動して、通常の人間操作に近い形でログイン認証したい。
-- Windows 側で Chrome / Chromium を起動すれば、通常のデスクトップセッション上でブラウザ操作を確認できる。
+そのため、現在は以下の方式にする。
+
+```text
+Playwright で Captive Portal の final_url だけ取得
+↓
+通常の Chrome / Edge を --app モードで開く
+↓
+OSレベルのキーボード入力で ID / Password を入力
+↓
+Enter で送信
+```
 
 ## ファイル
 
@@ -35,13 +43,19 @@ WSL ではなく、Windows ネイティブの Python から実行する。
 ├── setup.sh
 ├── setup_windows.bat
 ├── run_windows.bat
+├── auto_type_real_browser_windows.py
+├── open_real_browser_windows.py
+├── manual_login_windows.py
 ├── test.py
 └── captive_login.py
 ```
 
-- `captive_login.py`: 本番用ログインスクリプト。
-- `setup_windows.bat`: Windows ネイティブ環境の初期セットアップ。
-- `run_windows.bat`: Windows 上で headed ブラウザを起動してログイン処理を実行。
+- `auto_type_real_browser_windows.py`: final_url を解決し、通常の Chrome / Edge に対して OS レベルのキー入力で ID / Password 入力と Enter 送信を行う。
+- `open_real_browser_windows.py`: Playwright で Captive Portal の final_url を解決し、通常の Windows ブラウザで開く。
+- `run_windows.bat`: `auto_type_real_browser_windows.py` を実行するラッパー。
+- `manual_login_windows.py`: Playwright 管理下ブラウザで入力し、最後だけ手動クリックする旧切り分け用スクリプト。
+- `captive_login.py`: 自動送信用の既存スクリプト。
+- `setup_windows.bat`: Windows ネイティブ環境の初期セットアップ。Python がなければ winget で Python 3.12 のインストールも試す。
 - `test.py`: 認証ページを開いて `login.png` を保存する簡易確認用。
 
 ## Windows セットアップ
@@ -54,11 +68,13 @@ setup_windows.bat
 
 実行内容:
 
-1. `.venv` 作成
-2. `requirements.txt` インストール
-3. Playwright Chromium インストール
-4. `.env.example` から `.env` を作成
-5. `logs/` と `screenshots/` を作成
+1. Python 3.10 以上の確認
+2. Python が見つからない場合は winget で Python 3.12 をインストール
+3. `.venv` 作成
+4. `requirements.txt` インストール
+5. Playwright Chromium インストール
+6. `.env.example` から `.env` を作成
+7. `logs/` と `screenshots/` を作成
 
 `.env` を編集する。
 
@@ -72,15 +88,19 @@ PASSWORD_SELECTOR=input[name="password"]
 SUBMIT_SELECTOR=input[type="submit"]
 PORTAL_INVALID_CREDENTIALS_TEXT=ユーザー名またはパスワードが無効です
 PORTAL_REQUIRED_PARAMETER_TEXT=required parameter unavailable
-BROWSER_USER_AGENT=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36
-BROWSER_ACCEPT_LANGUAGE=ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7
+```
+
+必要なら通常ブラウザのパスと入力待機時間を指定する。
+
+```env
+REAL_BROWSER_PATH=C:\Program Files\Google\Chrome\Application\chrome.exe
+REAL_BROWSER_WAIT_SECONDS=5
+REAL_BROWSER_INITIAL_TAB_COUNT=1
 ```
 
 `.env` は Git に入れない。
 
-## Windows で手動実行
-
-通常実行:
+## Windows で実行
 
 ```bat
 run_windows.bat
@@ -89,63 +109,91 @@ run_windows.bat
 `run_windows.bat` は内部で以下に相当する実行を行う。
 
 ```bat
-.venv\Scripts\python.exe captive_login.py --windows-manual
+.venv\Scripts\python.exe auto_type_real_browser_windows.py
 ```
 
-`--windows-manual` は以下のプリセットを適用する。
+流れ:
 
 ```text
---headed
---browser-channel chrome
---user-data-dir .playwright-profile
---submit-mode click
---input-mode type
---before-submit-wait-ms 5000
+CHECK_URL を Playwright で開く
+↓
+Captive Portal にリダイレクトされた final_url を取得
+↓
+通常の Chrome / Edge を --app モードで起動
+↓
+少し待機
+↓
+Tab を指定回数押す
+↓
+ID を貼り付け
+↓
+Tab
+↓
+Password を貼り付け
+↓
+Enter で送信
 ```
 
-Google Chrome が Playwright から見つからない場合、スクリプトは Playwright bundled Chromium にフォールバックする。
-
-強制実行:
+Enter送信せず、入力だけ行う場合:
 
 ```bat
-run_windows.bat --force
+run_windows.bat --no-submit
 ```
 
-送信なし確認:
+URLだけ確認する場合:
 
 ```bat
-run_windows.bat --dry-run --force
+run_windows.bat --url-only
 ```
 
-直接認証URLを開く:
+入力位置がずれる場合は、Tab回数を調整する。
 
 ```bat
-run_windows.bat --force --entry-mode direct
+run_windows.bat --tab-count 2
+run_windows.bat --tab-count 3
 ```
 
-## Python から直接実行する場合
+ページ表示が遅い場合は、待機秒数を増やす。
+
+```bat
+run_windows.bat --wait-seconds 8
+```
+
+URL解決用の一時 Playwright ブラウザを表示したい場合:
+
+```bat
+run_windows.bat --headed-resolver
+```
+
+## 実行ログ
+
+解決したURLは `screenshots/` に保存される。
+
+```text
+screenshots/YYYYMMDD-HHMMSS-resolved-url.txt
+```
+
+## 旧方式
+
+通常ブラウザで開くだけの場合:
+
+```bat
+.venv\Scripts\python.exe open_real_browser_windows.py
+```
+
+Playwright 管理下ブラウザでID/Passwordを入力し、最後だけ手動クリックする旧切り分け用スクリプト:
+
+```bat
+.venv\Scripts\python.exe manual_login_windows.py
+```
+
+自動送信を試す場合:
 
 ```bat
 .venv\Scripts\python.exe captive_login.py --windows-manual --force
 ```
 
-Chrome チャンネルを使わない場合:
-
-```bat
-.venv\Scripts\python.exe captive_login.py --headed --user-data-dir .playwright-profile --submit-mode click --input-mode type --before-submit-wait-ms 5000 --force
-```
-
-## 実行ログ
-
-スクリーンショットとHTMLは `screenshots/` に保存される。
-
-```text
-screenshots/YYYYMMDD-HHMMSS-01-opened.png
-screenshots/YYYYMMDD-HHMMSS-02-filled.png
-screenshots/YYYYMMDD-HHMMSS-03-after-submit.png
-```
-
-HTML保存時、`.env` のユーザー名とパスワードはマスクされる。
+ただし、Playwright 管理下ブラウザで `required parameter unavailable` が出る場合は、`run_windows.bat` の通常ブラウザ + OS キー入力方式を使う。
 
 ## WSL / Linux セットアップ
 
@@ -156,13 +204,13 @@ chmod +x setup.sh
 ./setup.sh
 ```
 
-ただし、headed 実行は X server / DISPLAY に依存する。Windowsで見えるブラウザを起動したい場合は、WSLではなく `setup_windows.bat` と `run_windows.bat` を使う。
+ただし、headed 実行は X server / DISPLAY に依存する。Windowsで通常ブラウザを開きたい場合は、WSLではなく `setup_windows.bat` と `run_windows.bat` を使う。
 
 ## 注意
 
 - `.env` をコミットしない。
 - 認証情報をコードに直書きしない。
 - スクリーンショットに情報が写る可能性があるため Git に入れない。
-- `.playwright-profile/` は Git に入れない。
+- `.playwright-profile/` と `.playwright-url-resolver-profile/` は Git に入れない。
 - CAPTCHA / MFA / OTP には対応しない。
 - 利用前にネットワーク利用規程を確認する。
