@@ -24,11 +24,18 @@ DEFAULT_USER_AGENT = (
     "Chrome/126.0.0.0 Safari/537.36"
 )
 
+# Direct login URL. This is only a fallback/debug path. Captive portal systems often
+# require redirect-origin parameters, so the default flow should not start here.
 LOGIN_URL = os.getenv("CAPTIVE_PORTAL_URL", "http://cpauth.cc.miyazaki-u.ac.jp/guest/cp-login.php")
+
+# Online check. Expected result after authentication is HTTP 204.
 CHECK_URL = os.getenv("CHECK_URL", "http://connectivitycheck.gstatic.com/generate_204")
+
+# Browser entry URL for triggering the captive portal redirect. Use plain HTTP.
+CAPTIVE_ENTRY_URL = os.getenv("CAPTIVE_ENTRY_URL", "http://neverssl.com/")
+
 USERNAME = os.getenv("CAPTIVE_USERNAME", "")
 PASSWORD = os.getenv("CAPTIVE_PASSWORD", "")
-
 USERNAME_SELECTOR = (os.getenv("USERNAME_SELECTOR") or DEFAULT_USERNAME_SELECTOR).strip()
 PASSWORD_SELECTOR = (os.getenv("PASSWORD_SELECTOR") or DEFAULT_PASSWORD_SELECTOR).strip()
 SUBMIT_SELECTOR = (os.getenv("SUBMIT_SELECTOR") or DEFAULT_SUBMIT_SELECTOR).strip()
@@ -61,17 +68,7 @@ def log(message: str) -> None:
 
 
 def normalize_argv(argv: list[str]) -> list[str]:
-    """Accept common Windows/manual shorthand.
-
-    Examples:
-      force -> --force
-      /force -> --force
-      -force -> --force
-      —force -> --force
-      direct -> --entry-mode direct
-      human -> --input-mode human
-      nwa -> --submit-mode nwa
-    """
+    """Accept common Windows/manual shorthand."""
 
     normalized: list[str] = []
     flag_aliases = {
@@ -84,7 +81,7 @@ def normalize_argv(argv: list[str]) -> list[str]:
         "keep-open-on-failure": "--keep-open-on-failure",
         "keep-open": "--keep-open-on-failure",
     }
-    entry_modes = {"detect-first", "direct"}
+    entry_modes = {"portal-flow", "flow", "detect-first", "direct"}
     submit_modes = {"auto", "click", "nwa", "form-submit", "enter"}
     input_modes = {"fill", "type", "human"}
 
@@ -106,7 +103,7 @@ def normalize_argv(argv: list[str]) -> list[str]:
         arg = arg.replace("—", "--").replace("–", "--").replace("−", "-")
 
         if expecting_value_for:
-            normalized.append(arg)
+            normalized.append("portal-flow" if arg == "flow" else arg)
             expecting_value_for = None
             continue
 
@@ -120,7 +117,7 @@ def normalize_argv(argv: list[str]) -> list[str]:
         if lowered in flag_aliases:
             normalized.append(flag_aliases[lowered])
         elif lowered in entry_modes:
-            normalized.extend(["--entry-mode", lowered])
+            normalized.extend(["--entry-mode", "portal-flow" if lowered == "flow" else lowered])
         elif lowered in submit_modes:
             normalized.extend(["--submit-mode", lowered])
         elif lowered in input_modes:
@@ -253,6 +250,16 @@ def has_login_form(page) -> bool:
     return form_count > 0 and username_count > 0 and password_count > 0
 
 
+def page_contains_required_parameter_error(page) -> bool:
+    try:
+        body_text = page.evaluate(
+            "() => document.body ? document.body.innerText : document.documentElement.innerText"
+        )
+    except Exception:
+        return False
+    return bool(REQUIRED_PARAMETER_TEXT and REQUIRED_PARAMETER_TEXT in body_text)
+
+
 def setup_network_logging(page) -> None:
     def on_request(request) -> None:
         if request.is_navigation_request() or request.method == "POST":
@@ -271,6 +278,15 @@ def setup_network_logging(page) -> None:
 
 
 def open_login_page(page, entry_mode: str) -> None:
+    if entry_mode == "portal-flow":
+        log(f"Captive Portal 正規リダイレクト開始: {CAPTIVE_ENTRY_URL}")
+        page.goto(CAPTIVE_ENTRY_URL, wait_until="domcontentloaded", timeout=30_000)
+        page.wait_for_timeout(5_000)
+        log(f"Captive Portal 正規リダイレクト後: {page.url}")
+        if page_contains_required_parameter_error(page):
+            log("警告: portal-flow でも required parameter unavailable を検出")
+        return
+
     if entry_mode == "detect-first":
         log(f"Captive Portal 検出URL遷移開始: {CHECK_URL}")
         try:
@@ -289,10 +305,10 @@ def open_login_page(page, entry_mode: str) -> None:
     elif entry_mode != "direct":
         raise RuntimeError(f"Unknown entry mode: {entry_mode}")
 
-    log(f"認証ページ遷移開始: {LOGIN_URL}")
+    log(f"認証ページ直接遷移開始: {LOGIN_URL}")
     page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=30_000)
     page.wait_for_timeout(5_000)
-    log(f"認証ページ遷移完了: {page.url}")
+    log(f"認証ページ直接遷移完了: {page.url}")
 
 
 def save_artifacts(page, ts: str, label: str) -> None:
@@ -522,6 +538,10 @@ def run_login(args: argparse.Namespace) -> str:
             open_login_page(page, entry_mode=args.entry_mode)
             save_artifacts(page, ts, "01-opened")
 
+            if page_contains_required_parameter_error(page):
+                keep_open = args.keep_open_on_failure
+                return LOGIN_REQUIRED_PARAMETER
+
             if not has_login_form(page):
                 keep_open = args.keep_open_on_failure
                 return LOGIN_FORM_NOT_FOUND
@@ -594,7 +614,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--headed", action="store_true", help="表示ブラウザで起動")
     parser.add_argument("--browser-channel", help="chrome など")
     parser.add_argument("--user-data-dir", help="永続プロファイルディレクトリ")
-    parser.add_argument("--entry-mode", choices=["detect-first", "direct"], default="detect-first")
+    parser.add_argument(
+        "--entry-mode",
+        choices=["portal-flow", "detect-first", "direct"],
+        default="portal-flow",
+        help="portal-flow は通常HTTPページからCaptive Portalリダイレクトを踏む",
+    )
     parser.add_argument("--keep-open-on-failure", action="store_true", default=None, help="失敗時にブラウザを閉じない")
 
     raw_args = sys.argv[1:]
@@ -622,7 +647,8 @@ def main() -> None:
         f"submit_mode={args.submit_mode}, input_mode={args.input_mode}, "
         f"before_submit_wait_ms={args.before_submit_wait_ms}, headed={args.headed}, "
         f"browser_channel={args.browser_channel}, user_data_dir={args.user_data_dir}, "
-        f"entry_mode={args.entry_mode}, keep_open_on_failure={args.keep_open_on_failure}"
+        f"entry_mode={args.entry_mode}, captive_entry_url={CAPTIVE_ENTRY_URL}, "
+        f"keep_open_on_failure={args.keep_open_on_failure}"
     )
 
     online_before = check_online()
@@ -638,10 +664,12 @@ def main() -> None:
         log("認証失敗: 認証情報エラー")
         return
     if result == LOGIN_REQUIRED_PARAMETER:
-        log("フォームパラメータ不足: detect-first / auto / human / enter を試してください")
+        log("フォームパラメータ不足: 直URLではなく portal-flow の正規リダイレクトで入る必要があります")
+        log(f"CAPTIVE_ENTRY_URL={CAPTIVE_ENTRY_URL} を別のHTTP URLに変えて再試行してください")
         return
     if result == LOGIN_FORM_NOT_FOUND:
-        log("フォーム未検出")
+        log("フォーム未検出: Captive Portal リダイレクトが発生していない可能性があります")
+        log(f"CAPTIVE_ENTRY_URL={CAPTIVE_ENTRY_URL} を別のHTTP URLに変えて再試行してください")
         return
     if args.dry_run:
         log("処理終了: dry-run")
