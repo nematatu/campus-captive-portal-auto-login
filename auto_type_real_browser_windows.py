@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pyautogui
 import pygetwindow as gw
-import pyperclip
 from dotenv import load_dotenv
 
 from open_real_browser_windows import log, resolve_captive_portal_url
@@ -81,19 +80,11 @@ def list_window_titles() -> list[str]:
 
 def activate_browser_window(wait_seconds: float) -> bool:
     deadline = time.time() + max(wait_seconds, 1)
-    keywords = [
-        "cpauth",
-        "cp-login",
-        "chrome",
-        "edge",
-        "Google Chrome",
-        "Microsoft Edge",
-    ]
+    keywords = ["cpauth", "cp-login", "chrome", "edge", "Google Chrome", "Microsoft Edge"]
 
     while time.time() < deadline:
-        windows = gw.getAllWindows()
         candidates = []
-        for window in windows:
+        for window in gw.getAllWindows():
             title = (window.title or "").strip()
             if not title:
                 continue
@@ -106,7 +97,7 @@ def activate_browser_window(wait_seconds: float) -> bool:
                 if window.isMinimized:
                     window.restore()
                 window.activate()
-                time.sleep(0.5)
+                time.sleep(0.8)
                 log(f"activated window: {window.title!r}")
                 return True
             except Exception as error:
@@ -121,39 +112,35 @@ def activate_browser_window(wait_seconds: float) -> bool:
     return False
 
 
-def paste_text(text: str) -> None:
-    pyperclip.copy(text)
-    pyautogui.hotkey("ctrl", "v")
+def type_text_directly(text: str, interval: float) -> None:
+    pyautogui.write(text, interval=interval)
 
 
-def auto_type_credentials(tab_count: int, wait_seconds: float, submit: bool) -> None:
+def auto_type_credentials(tab_count: int, wait_seconds: float, submit: bool, char_interval: float) -> None:
     log(f"wait for browser: {wait_seconds}s")
     time.sleep(wait_seconds)
 
-    pyautogui.PAUSE = 0.25
+    pyautogui.PAUSE = 0.2
     activated = activate_browser_window(wait_seconds=5)
     if not activated:
         raise RuntimeError("Failed to activate Chrome/Edge window. Refusing to type into the wrong window.")
 
-    # Make sure the page, not the terminal, receives keyboard input.
-    pyautogui.click(x=500, y=500)
-    time.sleep(0.3)
-
+    # Keyboard-only flow. No clipboard paste and no manual click.
     for _ in range(tab_count):
         pyautogui.press("tab")
 
-    log("type username by clipboard paste")
-    paste_text(USERNAME)
+    log("type username directly")
+    type_text_directly(USERNAME, interval=char_interval)
     pyautogui.press("tab")
 
-    log("type password by clipboard paste")
-    paste_text(PASSWORD)
+    log("type password directly")
+    type_text_directly(PASSWORD, interval=char_interval)
 
     if submit:
         log("press Enter to submit")
         pyautogui.press("enter")
     else:
-        log("submit skipped. Press the login button manually.")
+        log("submit skipped")
 
 
 def main() -> None:
@@ -174,6 +161,12 @@ def main() -> None:
         type=int,
         default=int(os.getenv("REAL_BROWSER_INITIAL_TAB_COUNT", "1")),
         help="Number of Tab key presses before typing username. Default: 1.",
+    )
+    parser.add_argument(
+        "--char-interval",
+        type=float,
+        default=float(os.getenv("REAL_BROWSER_CHAR_INTERVAL", "0.05")),
+        help="Delay between typed characters. Default: 0.05.",
     )
     parser.add_argument(
         "--no-submit",
@@ -203,6 +196,7 @@ def main() -> None:
         tab_count=args.tab_count,
         wait_seconds=args.wait_seconds,
         submit=not args.no_submit,
+        char_interval=args.char_interval,
     )
 
 
