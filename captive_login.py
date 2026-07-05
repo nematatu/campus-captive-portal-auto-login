@@ -28,13 +28,20 @@ LOGIN_URL = os.getenv("CAPTIVE_PORTAL_URL", "http://cpauth.cc.miyazaki-u.ac.jp/g
 CHECK_URL = os.getenv("CHECK_URL", "http://connectivitycheck.gstatic.com/generate_204")
 USERNAME = os.getenv("CAPTIVE_USERNAME", "")
 PASSWORD = os.getenv("CAPTIVE_PASSWORD", "")
+
 USERNAME_SELECTOR = (os.getenv("USERNAME_SELECTOR") or DEFAULT_USERNAME_SELECTOR).strip()
 PASSWORD_SELECTOR = (os.getenv("PASSWORD_SELECTOR") or DEFAULT_PASSWORD_SELECTOR).strip()
 SUBMIT_SELECTOR = (os.getenv("SUBMIT_SELECTOR") or DEFAULT_SUBMIT_SELECTOR).strip()
 USER_AGENT = (os.getenv("BROWSER_USER_AGENT") or DEFAULT_USER_AGENT).strip()
-ACCEPT_LANGUAGE = (os.getenv("BROWSER_ACCEPT_LANGUAGE") or "ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7").strip()
-INVALID_CREDENTIALS_TEXT = (os.getenv("PORTAL_INVALID_CREDENTIALS_TEXT") or "ユーザー名またはパスワードが無効です").strip()
-REQUIRED_PARAMETER_TEXT = (os.getenv("PORTAL_REQUIRED_PARAMETER_TEXT") or "required parameter unavailable").strip()
+ACCEPT_LANGUAGE = (
+    os.getenv("BROWSER_ACCEPT_LANGUAGE") or "ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7"
+).strip()
+INVALID_CREDENTIALS_TEXT = (
+    os.getenv("PORTAL_INVALID_CREDENTIALS_TEXT") or "ユーザー名またはパスワードが無効です"
+).strip()
+REQUIRED_PARAMETER_TEXT = (
+    os.getenv("PORTAL_REQUIRED_PARAMETER_TEXT") or "required parameter unavailable"
+).strip()
 
 SCREENSHOT_DIR = Path("screenshots")
 SCREENSHOT_DIR.mkdir(exist_ok=True)
@@ -45,7 +52,7 @@ LOGIN_REQUIRED_PARAMETER = "required_parameter"
 LOGIN_FORM_NOT_FOUND = "form_not_found"
 
 
-def now_id() -> str:
+def timestamp() -> str:
     return datetime.now().strftime("%Y%m%d-%H%M%S")
 
 
@@ -53,24 +60,98 @@ def log(message: str) -> None:
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}", flush=True)
 
 
-def mask_post_data(post_data: str | None) -> str:
+def normalize_argv(argv: list[str]) -> list[str]:
+    """Accept common Windows/manual shorthand.
+
+    Examples:
+      force -> --force
+      /force -> --force
+      -force -> --force
+      —force -> --force
+      direct -> --entry-mode direct
+      human -> --input-mode human
+      nwa -> --submit-mode nwa
+    """
+
+    normalized: list[str] = []
+    flag_aliases = {
+        "force": "--force",
+        "dry-run": "--dry-run",
+        "dryrun": "--dry-run",
+        "windows-manual": "--windows-manual",
+        "windows": "--windows-manual",
+        "headed": "--headed",
+        "keep-open-on-failure": "--keep-open-on-failure",
+        "keep-open": "--keep-open-on-failure",
+    }
+    entry_modes = {"detect-first", "direct"}
+    submit_modes = {"auto", "click", "nwa", "form-submit", "enter"}
+    input_modes = {"fill", "type", "human"}
+
+    expecting_value_for: str | None = None
+    options_with_values = {
+        "--submit-mode",
+        "--input-mode",
+        "--before-submit-wait-ms",
+        "--browser-channel",
+        "--user-data-dir",
+        "--entry-mode",
+    }
+
+    for raw_arg in argv:
+        arg = raw_arg.strip()
+        if not arg:
+            continue
+
+        arg = arg.replace("—", "--").replace("–", "--").replace("−", "-")
+
+        if expecting_value_for:
+            normalized.append(arg)
+            expecting_value_for = None
+            continue
+
+        if arg in options_with_values:
+            normalized.append(arg)
+            expecting_value_for = arg
+            continue
+
+        lowered = arg.lower().lstrip("-/")
+
+        if lowered in flag_aliases:
+            normalized.append(flag_aliases[lowered])
+        elif lowered in entry_modes:
+            normalized.extend(["--entry-mode", lowered])
+        elif lowered in submit_modes:
+            normalized.extend(["--submit-mode", lowered])
+        elif lowered in input_modes:
+            normalized.extend(["--input-mode", lowered])
+        else:
+            normalized.append(arg)
+
+    return normalized
+
+
+def mask_sensitive_value(name: str, value: str) -> str:
+    lowered = name.lower()
+    if lowered in {"user", "username", "login", "id"} or "pass" in lowered:
+        return f"<masked length={len(value)}>"
+    return value
+
+
+def format_post_data(post_data: str | None) -> str:
     if not post_data:
         return ""
     pairs = parse_qsl(post_data, keep_blank_values=True)
     if not pairs:
         return post_data[:500]
-    masked = []
-    for name, value in pairs:
-        key = name.lower()
-        if key in {"user", "username", "login", "id"} or "pass" in key:
-            value = f"<masked length={len(value)}>"
-        masked.append(f"{name}={value!r}")
-    return "&".join(masked)
+    return "&".join(
+        f"{name}={mask_sensitive_value(name, value)!r}" for name, value in pairs
+    )
 
 
 def check_online() -> bool:
     log(f"疎通確認開始: {CHECK_URL}")
-    req = urllib.request.Request(
+    request = urllib.request.Request(
         CHECK_URL,
         headers={
             "User-Agent": USER_AGENT,
@@ -80,15 +161,18 @@ def check_online() -> bool:
         },
         method="GET",
     )
+
     try:
-        with urllib.request.urlopen(req, timeout=10) as res:
-            log(f"疎通確認完了: HTTP {res.getcode()}, final_url={res.geturl()}")
-            return res.getcode() == 204
-    except urllib.error.HTTPError as err:
-        log(f"疎通確認完了: HTTP {err.code}, final_url={err.url}")
-        return err.code == 204
-    except Exception as err:
-        log(f"疎通確認失敗: {err}")
+        with urllib.request.urlopen(request, timeout=10) as response:
+            status = response.getcode()
+            final_url = response.geturl()
+            log(f"疎通確認完了: HTTP {status}, final_url={final_url}")
+            return status == 204
+    except urllib.error.HTTPError as error:
+        log(f"疎通確認完了: HTTP {error.code}, final_url={error.url}")
+        return error.code == 204
+    except Exception as error:
+        log(f"疎通確認失敗: {error}")
         return False
 
 
@@ -98,14 +182,16 @@ def require_credentials() -> None:
         missing.append("CAPTIVE_USERNAME")
     if not PASSWORD:
         missing.append("CAPTIVE_PASSWORD")
+
     if missing:
-        raise RuntimeError(f"Missing environment variables: {', '.join(missing)}. Edit .env first.")
+        names = ", ".join(missing)
+        raise RuntimeError(f"Missing environment variables: {names}. Edit .env first.")
 
 
-def first(page, selector: str, label: str):
+def get_first(page, selector: str, label: str):
     locator = page.locator(selector)
     count = locator.count()
-    log(f"{label}: selector={selector}, count={count}")
+    log(f"{label}確認: selector={selector}, count={count}")
     if count == 0:
         raise RuntimeError(f"{label} was not found. selector={selector}")
     return locator.first
@@ -114,21 +200,23 @@ def first(page, selector: str, label: str):
 def fire_input_events(locator) -> None:
     locator.dispatch_event("input")
     locator.dispatch_event("change")
-    locator.evaluate("el => el.blur()")
+    locator.evaluate("(el) => el.blur()")
 
 
-def fill_by_selector(page, selector: str, value: str, label: str, mode: str) -> None:
-    field = first(page, selector, label)
-    log(f"{label}入力開始: mode={mode}")
-    if mode == "fill":
+def fill_field(page, selector: str, value: str, label: str, input_mode: str) -> None:
+    field = get_first(page, selector, label)
+    log(f"{label}入力開始: mode={input_mode}")
+
+    if input_mode == "fill":
         field.fill(value)
-    elif mode == "type":
+    elif input_mode == "type":
         field.click()
         modifier = "Meta" if sys.platform == "darwin" else "Control"
         page.keyboard.press(f"{modifier}+A")
         page.keyboard.type(value, delay=50)
     else:
-        raise RuntimeError(f"Unknown input mode: {mode}")
+        raise RuntimeError(f"Unknown selector input mode: {input_mode}")
+
     fire_input_events(field)
     log(f"{label}入力完了")
 
@@ -136,7 +224,7 @@ def fill_by_selector(page, selector: str, value: str, label: str, mode: str) -> 
 def fill_login(page, input_mode: str) -> None:
     if input_mode == "human":
         log("人間操作風入力開始")
-        username = first(page, USERNAME_SELECTOR, "ユーザー名 input")
+        username = get_first(page, USERNAME_SELECTOR, "ユーザー名 input")
         username.click()
         modifier = "Meta" if sys.platform == "darwin" else "Control"
         page.keyboard.press(f"{modifier}+A")
@@ -148,26 +236,30 @@ def fill_login(page, input_mode: str) -> None:
         log("人間操作風入力完了")
         return
 
-    fill_by_selector(page, USERNAME_SELECTOR, USERNAME, "ユーザー名 input", input_mode)
-    fill_by_selector(page, PASSWORD_SELECTOR, PASSWORD, "パスワード input", input_mode)
+    fill_field(page, USERNAME_SELECTOR, USERNAME, "ユーザー名 input", input_mode)
+    fill_field(page, PASSWORD_SELECTOR, PASSWORD, "パスワード input", input_mode)
 
 
 def has_login_form(page) -> bool:
     form_count = page.locator("form").count()
-    user_count = page.locator(USERNAME_SELECTOR).count()
-    pass_count = page.locator(PASSWORD_SELECTOR).count()
+    username_count = page.locator(USERNAME_SELECTOR).count()
+    password_count = page.locator(PASSWORD_SELECTOR).count()
     submit_count = page.locator(SUBMIT_SELECTOR).count()
-    log(f"ログインフォーム確認: form={form_count}, user={user_count}, pass={pass_count}, submit={submit_count}, url={page.url}")
-    return form_count > 0 and user_count > 0 and pass_count > 0
+    log(
+        "ログインフォーム確認: "
+        f"form={form_count}, username={username_count}, "
+        f"password={password_count}, submit={submit_count}, current_url={page.url}"
+    )
+    return form_count > 0 and username_count > 0 and password_count > 0
 
 
 def setup_network_logging(page) -> None:
     def on_request(request) -> None:
         if request.is_navigation_request() or request.method == "POST":
             log(f"通信診断: request method={request.method}, url={request.url}")
-            data = mask_post_data(request.post_data)
-            if data:
-                log(f"通信診断: request post_data={data}")
+            post_data = format_post_data(request.post_data)
+            if post_data:
+                log(f"通信診断: request post_data={post_data}")
 
     def on_response(response) -> None:
         request = response.request
@@ -180,131 +272,207 @@ def setup_network_logging(page) -> None:
 
 def open_login_page(page, entry_mode: str) -> None:
     if entry_mode == "detect-first":
-        log(f"Captive Portal 検出URLへ遷移: {CHECK_URL}")
+        log(f"Captive Portal 検出URL遷移開始: {CHECK_URL}")
         try:
             page.goto(CHECK_URL, wait_until="domcontentloaded", timeout=30_000)
             page.wait_for_timeout(5_000)
-            log(f"検出URL後: {page.url}")
+            log(f"Captive Portal 検出URL遷移完了: {page.url}")
             if has_login_form(page):
+                log("Captive Portal 検出URLからログインフォームを検出")
                 return
-        except PlaywrightError as err:
-            if "net::ERR_ABORTED" not in str(err):
+        except PlaywrightError as error:
+            if "net::ERR_ABORTED" in str(error):
+                log(f"Captive Portal 検出URL遷移は204応答のため中断扱い: {error}")
+            else:
                 raise
-            log(f"検出URL遷移は204応答のため中断扱い: {err}")
-        log("検出URLでフォーム未検出。直接認証URLへフォールバック")
+        log("Captive Portal 検出URLではログインフォーム未検出。直接認証URLへフォールバック")
     elif entry_mode != "direct":
         raise RuntimeError(f"Unknown entry mode: {entry_mode}")
 
-    log(f"認証URLへ遷移: {LOGIN_URL}")
+    log(f"認証ページ遷移開始: {LOGIN_URL}")
     page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=30_000)
     page.wait_for_timeout(5_000)
-    log(f"認証URL後: {page.url}")
+    log(f"認証ページ遷移完了: {page.url}")
 
 
 def save_artifacts(page, ts: str, label: str) -> None:
     png = SCREENSHOT_DIR / f"{ts}-{label}.png"
     html = SCREENSHOT_DIR / f"{ts}-{label}.html"
+
     page.screenshot(path=str(png), full_page=True)
+
     content = page.content()
     for secret in (USERNAME, PASSWORD):
         if secret:
             content = content.replace(secret, f"<masked length={len(secret)}>")
-    content = re.sub(r'(<input[^>]+name=["\']password["\'][^>]*value=["\'])[^"\']*(["\'])', r"\1<masked>\2", content, flags=re.I)
-    content = re.sub(r'(<input[^>]+name=["\']user["\'][^>]*value=["\'])[^"\']*(["\'])', r"\1<masked>\2", content, flags=re.I)
+
+    content = re.sub(
+        r'(<input[^>]+name=["\']password["\'][^>]*value=["\'])[^"\']*(["\'])',
+        r"\1<masked>\2",
+        content,
+        flags=re.IGNORECASE,
+    )
+    content = re.sub(
+        r'(<input[^>]+name=["\']user["\'][^>]*value=["\'])[^"\']*(["\'])',
+        r"\1<masked>\2",
+        content,
+        flags=re.IGNORECASE,
+    )
     html.write_text(content, encoding="utf-8")
-    log(f"保存: {png}, {html}")
+    log(f"保存完了: {png}, {html}")
 
 
 def log_before_submit(page) -> None:
-    info = page.evaluate(
+    diagnostics = page.evaluate(
         """
-        ({ userSel, passSel, submitSel }) => {
-          const form = document.querySelector('form');
-          const user = document.querySelector(userSel);
-          const pass = document.querySelector(passSel);
-          const submit = document.querySelector(submitSel);
+        ({ usernameSelector, passwordSelector, submitSelector }) => {
+          const form = document.querySelector("form");
+          const user = document.querySelector(usernameSelector);
+          const password = document.querySelector(passwordSelector);
+          const submit = document.querySelector(submitSelector);
           return {
             url: location.href,
-            form: form ? { id: form.id || '', name: form.name || '', action: form.action || '', method: form.method || '' } : null,
-            hidden: Array.from(document.querySelectorAll('input[type="hidden"]')).map(i => ({ name: i.name || '', value: i.value || '' })),
-            user: user ? { name: user.name || '', id: user.id || '', hasValue: !!user.value } : null,
-            pass: pass ? { name: pass.name || '', id: pass.id || '', hasValue: !!pass.value } : null,
-            submit: submit ? { id: submit.id || '', name: submit.name || '', value: submit.value || '', disabled: !!submit.disabled } : null,
-            hasNwaSubmitForm: typeof window.Nwa_SubmitForm === 'function',
+            form: form ? {
+              id: form.id || "",
+              name: form.getAttribute("name") || "",
+              action: form.getAttribute("action") || "",
+              actionResolved: form.action || "",
+              method: form.getAttribute("method") || form.method || "",
+            } : null,
+            hiddenInputs: Array.from(document.querySelectorAll('input[type="hidden"]')).map((input) => ({
+              name: input.getAttribute("name") || "",
+              value: input.value || "",
+            })),
+            userInput: user ? {
+              name: user.getAttribute("name") || "",
+              id: user.id || "",
+              hasValue: !!user.value,
+            } : null,
+            passwordInput: password ? {
+              name: password.getAttribute("name") || "",
+              id: password.id || "",
+              hasValue: !!password.value,
+            } : null,
+            submitInput: submit ? {
+              id: submit.id || "",
+              name: submit.getAttribute("name") || "",
+              value: submit.value || "",
+              disabled: !!submit.disabled,
+            } : null,
+            hasNwaSubmitForm: typeof window.Nwa_SubmitForm === "function",
           };
         }
         """,
-        {"userSel": USERNAME_SELECTOR, "passSel": PASSWORD_SELECTOR, "submitSel": SUBMIT_SELECTOR},
+        {
+            "usernameSelector": USERNAME_SELECTOR,
+            "passwordSelector": PASSWORD_SELECTOR,
+            "submitSelector": SUBMIT_SELECTOR,
+        },
     )
-    log(f"送信直前診断: url={info['url']}")
-    log(f"送信直前診断: form={info['form']}")
-    log(f"送信直前診断: user={info['user']}, pass={info['pass']}, submit={info['submit']}")
-    log(f"送信直前診断: hidden={info['hidden']}")
-    log(f"送信直前診断: Nwa_SubmitForm={info['hasNwaSubmitForm']}")
+    log(f"送信直前診断: url={diagnostics['url']}")
+    log(f"送信直前診断: form={diagnostics['form']}")
+    log(f"送信直前診断: hidden input count={len(diagnostics['hiddenInputs'])}")
+    for index, hidden in enumerate(diagnostics["hiddenInputs"], start=1):
+        log(f"送信直前診断: hidden[{index}] name={hidden['name']!r}, value={hidden['value']!r}")
+    log(f"送信直前診断: user={diagnostics['userInput']}")
+    log(f"送信直前診断: password={diagnostics['passwordInput']}")
+    log(f"送信直前診断: submit={diagnostics['submitInput']}")
+    log(f"送信直前診断: Nwa_SubmitForm={diagnostics['hasNwaSubmitForm']}")
 
 
-def has_nwa(page) -> bool:
+def has_nwa_submit_form(page) -> bool:
     return bool(page.evaluate("() => typeof window.Nwa_SubmitForm === 'function'"))
 
 
-def wait_submit(page, required: bool) -> None:
+def wait_submit_enabled(page, required: bool) -> None:
     submit = page.locator(SUBMIT_SELECTOR)
     if submit.count() == 0:
         if required:
             raise RuntimeError(f"submit was not found. selector={SUBMIT_SELECTOR}")
         log("submit未検出。Enter送信を続行")
         return
+
     submit.first.wait_for(state="attached", timeout=10_000)
-    page.wait_for_function("sel => { const el = document.querySelector(sel); return !!el && !el.disabled; }", arg=SUBMIT_SELECTOR, timeout=10_000)
+    page.wait_for_function(
+        """
+        (selector) => {
+          const el = document.querySelector(selector);
+          return !!el && !el.disabled;
+        }
+        """,
+        arg=SUBMIT_SELECTOR,
+        timeout=10_000,
+    )
 
 
-def submit_login(page, mode: str) -> None:
-    log(f"ログイン送信開始: mode={mode}")
-    if mode == "auto":
-        mode = "nwa" if has_nwa(page) else "click"
-        log(f"auto送信で選択: {mode}")
+def submit_login(page, submit_mode: str) -> None:
+    log(f"ログイン送信開始: mode={submit_mode}")
 
-    if mode == "nwa":
-        wait_submit(page, required=True)
+    if submit_mode == "auto":
+        submit_mode = "nwa" if has_nwa_submit_form(page) else "click"
+        log(f"auto送信で選択: {submit_mode}")
+
+    if submit_mode == "nwa":
+        wait_submit_enabled(page, required=True)
         page.evaluate(
             """
-            (submitSel) => {
-              const form = document.querySelector('form');
-              const submit = document.querySelector(submitSel);
-              if (!form) throw new Error('form was not found');
-              if (!submit) throw new Error('submit was not found');
-              if (typeof window.Nwa_SubmitForm !== 'function') throw new Error('Nwa_SubmitForm was not found');
+            (submitSelector) => {
+              const form = document.querySelector("form");
+              const submit = document.querySelector(submitSelector);
+              if (!form) {
+                throw new Error("form was not found");
+              }
+              if (!submit) {
+                throw new Error("submit input was not found");
+              }
+              if (typeof window.Nwa_SubmitForm !== "function") {
+                throw new Error("Nwa_SubmitForm was not found");
+              }
               window.Nwa_SubmitForm(form.id, submit.id);
             }
             """,
             SUBMIT_SELECTOR,
         )
-    elif mode == "click":
-        wait_submit(page, required=True)
+    elif submit_mode == "click":
+        wait_submit_enabled(page, required=True)
         page.locator(SUBMIT_SELECTOR).first.click()
-    elif mode == "form-submit":
-        page.evaluate("() => { const form = document.querySelector('form'); if (!form) throw new Error('form was not found'); form.submit(); }")
-    elif mode == "enter":
-        wait_submit(page, required=False)
+    elif submit_mode == "form-submit":
+        page.evaluate(
+            """
+            () => {
+              const form = document.querySelector("form");
+              if (!form) {
+                throw new Error("form was not found");
+              }
+              form.submit();
+            }
+            """
+        )
+    elif submit_mode == "enter":
+        wait_submit_enabled(page, required=False)
         page.keyboard.press("Enter")
     else:
-        raise RuntimeError(f"Unknown submit mode: {mode}")
-    log(f"ログイン送信完了: mode={mode}")
+        raise RuntimeError(f"Unknown submit mode: {submit_mode}")
+
+    log(f"ログイン送信完了: mode={submit_mode}")
 
 
 def detect_login_failure(page) -> str | None:
-    text = page.evaluate("() => document.body ? document.body.innerText : document.documentElement.innerText")
-    if INVALID_CREDENTIALS_TEXT and INVALID_CREDENTIALS_TEXT in text:
+    body_text = page.evaluate(
+        "() => document.body ? document.body.innerText : document.documentElement.innerText"
+    )
+    if INVALID_CREDENTIALS_TEXT and INVALID_CREDENTIALS_TEXT in body_text:
         return LOGIN_INVALID_CREDENTIALS
-    if REQUIRED_PARAMETER_TEXT and REQUIRED_PARAMETER_TEXT in text:
+    if REQUIRED_PARAMETER_TEXT and REQUIRED_PARAMETER_TEXT in body_text:
         return LOGIN_REQUIRED_PARAMETER
     return None
 
 
-def launch_context(playwright, headless: bool, browser_channel: str | None, user_data_dir: str | None):
-    browser_options = {"headless": headless}
-    if browser_channel:
-        browser_options["channel"] = browser_channel
+def launch_context(playwright, args: argparse.Namespace):
+    browser_options = {"headless": not args.headed}
+    if args.browser_channel:
+        browser_options["channel"] = args.browser_channel
+
     context_options = {
         "viewport": {"width": 1366, "height": 768},
         "user_agent": USER_AGENT,
@@ -312,42 +480,53 @@ def launch_context(playwright, headless: bool, browser_channel: str | None, user
         "timezone_id": "Asia/Tokyo",
         "extra_http_headers": {"Accept-Language": ACCEPT_LANGUAGE},
     }
-    if user_data_dir:
-        context = playwright.chromium.launch_persistent_context(str(Path(user_data_dir)), **browser_options, **context_options)
-        log(f"永続プロファイル起動: {user_data_dir}")
+
+    if args.user_data_dir:
+        context = playwright.chromium.launch_persistent_context(
+            str(Path(args.user_data_dir)),
+            **browser_options,
+            **context_options,
+        )
+        log(f"永続プロファイル起動完了: user_data_dir={args.user_data_dir}")
         return None, context
+
     browser = playwright.chromium.launch(**browser_options)
     return browser, browser.new_context(**context_options)
 
 
 def run_login(args: argparse.Namespace) -> str:
     require_credentials()
-    ts = now_id()
+    ts = timestamp()
 
     with sync_playwright() as p:
         browser = None
         try:
-            browser, context = launch_context(p, not args.headed, args.browser_channel, args.user_data_dir)
-        except PlaywrightError as err:
-            if args.browser_channel and "Chromium distribution" in str(err):
-                log(f"Chrome起動失敗。bundled Chromiumへフォールバック: {err}")
-                browser, context = launch_context(p, not args.headed, None, args.user_data_dir)
+            browser, context = launch_context(p, args)
+        except PlaywrightError as error:
+            if args.browser_channel and "Chromium distribution" in str(error):
+                log(f"Chrome チャンネル起動失敗: {error}")
+                log("Chrome チャンネルを使わず、Playwright bundled Chromium で再試行")
+                args.browser_channel = None
+                browser, context = launch_context(p, args)
             else:
                 raise
 
-        context.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
+        context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
+        )
         page = context.new_page()
         setup_network_logging(page)
         keep_open = False
 
         try:
-            open_login_page(page, args.entry_mode)
+            open_login_page(page, entry_mode=args.entry_mode)
             save_artifacts(page, ts, "01-opened")
+
             if not has_login_form(page):
                 keep_open = args.keep_open_on_failure
                 return LOGIN_FORM_NOT_FOUND
 
-            fill_login(page, args.input_mode)
+            fill_login(page, input_mode=args.input_mode)
             save_artifacts(page, ts, "02-filled")
 
             if args.dry_run:
@@ -355,8 +534,10 @@ def run_login(args: argparse.Namespace) -> str:
 
             if args.before_submit_wait_ms > 0:
                 page.wait_for_timeout(args.before_submit_wait_ms)
+
             log_before_submit(page)
-            submit_login(page, args.submit_mode)
+            submit_login(page, submit_mode=args.submit_mode)
+
             page.wait_for_timeout(10_000)
             save_artifacts(page, ts, "03-after-submit")
 
@@ -364,11 +545,13 @@ def run_login(args: argparse.Namespace) -> str:
             if failure:
                 keep_open = args.keep_open_on_failure
                 return failure
+
             return LOGIN_OK
-        except (PlaywrightTimeoutError, Exception) as err:
+
+        except (PlaywrightTimeoutError, Exception) as error:
             save_artifacts(page, ts, "error")
             keep_open = args.keep_open_on_failure
-            raise err
+            raise error
         finally:
             if keep_open:
                 log("失敗時保持: ブラウザを閉じずに待機します。終了するには Ctrl+C")
@@ -394,20 +577,40 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="入力だけ行い、送信しない")
     parser.add_argument("--force", action="store_true", help="接続済み判定でもログイン処理を実行する")
-    parser.add_argument("--windows-manual", action="store_true", help="Windows向け: 表示ブラウザ、Chrome、永続プロファイルを使う")
-    parser.add_argument("--submit-mode", choices=["auto", "click", "nwa", "form-submit", "enter"], default="auto", help="送信方式。既定はauto")
-    parser.add_argument("--input-mode", choices=["fill", "type", "human"], default="type", help="入力方式。humanはTab/Enter中心")
+    parser.add_argument("--windows-manual", action="store_true", help="Windows向け既定値を使う")
+    parser.add_argument(
+        "--submit-mode",
+        choices=["auto", "click", "nwa", "form-submit", "enter"],
+        default="auto",
+        help="送信方式。既定はauto",
+    )
+    parser.add_argument(
+        "--input-mode",
+        choices=["fill", "type", "human"],
+        default="type",
+        help="入力方式。humanはTab/Enter中心",
+    )
     parser.add_argument("--before-submit-wait-ms", type=int, default=1000)
     parser.add_argument("--headed", action="store_true", help="表示ブラウザで起動")
     parser.add_argument("--browser-channel", help="chrome など")
     parser.add_argument("--user-data-dir", help="永続プロファイルディレクトリ")
     parser.add_argument("--entry-mode", choices=["detect-first", "direct"], default="detect-first")
     parser.add_argument("--keep-open-on-failure", action="store_true", default=None, help="失敗時にブラウザを閉じない")
-    args = parser.parse_args()
+
+    raw_args = sys.argv[1:]
+    normalized_args = normalize_argv(raw_args)
+    if raw_args != normalized_args:
+        log(f"引数正規化: raw={raw_args} -> normalized={normalized_args}")
+
+    args, unknown = parser.parse_known_args(normalized_args)
+    if unknown:
+        log(f"警告: 未使用の引数を無視します: {unknown}")
+
     if args.windows_manual:
         apply_windows_manual_defaults(args)
     elif args.keep_open_on_failure is None:
         args.keep_open_on_failure = False
+
     return args
 
 
@@ -416,7 +619,8 @@ def main() -> None:
     log(
         "mode: "
         f"dry_run={args.dry_run}, force={args.force}, windows_manual={args.windows_manual}, "
-        f"submit_mode={args.submit_mode}, input_mode={args.input_mode}, headed={args.headed}, "
+        f"submit_mode={args.submit_mode}, input_mode={args.input_mode}, "
+        f"before_submit_wait_ms={args.before_submit_wait_ms}, headed={args.headed}, "
         f"browser_channel={args.browser_channel}, user_data_dir={args.user_data_dir}, "
         f"entry_mode={args.entry_mode}, keep_open_on_failure={args.keep_open_on_failure}"
     )
@@ -429,11 +633,12 @@ def main() -> None:
         log("注意: 実行前からオンライン。ログイン成功判定はできない")
 
     result = run_login(args)
+
     if result == LOGIN_INVALID_CREDENTIALS:
         log("認証失敗: 認証情報エラー")
         return
     if result == LOGIN_REQUIRED_PARAMETER:
-        log("フォームパラメータ不足: --entry-mode detect-first / --submit-mode auto / --input-mode human を試してください")
+        log("フォームパラメータ不足: detect-first / auto / human / enter を試してください")
         return
     if result == LOGIN_FORM_NOT_FOUND:
         log("フォーム未検出")
