@@ -80,7 +80,17 @@ def list_window_titles() -> list[str]:
 
 def activate_browser_window(wait_seconds: float) -> bool:
     deadline = time.time() + max(wait_seconds, 1)
-    keywords = ["cpauth", "cp-login", "chrome", "edge", "Google Chrome", "Microsoft Edge"]
+    keywords = [
+        "宮崎大学ネットワーク認証",
+        "ネットワーク認証",
+        "認証",
+        "cpauth",
+        "cp-login",
+        "chrome",
+        "edge",
+        "google chrome",
+        "microsoft edge",
+    ]
 
     while time.time() < deadline:
         candidates = []
@@ -121,7 +131,7 @@ def auto_type_credentials(tab_count: int, wait_seconds: float, submit: bool, cha
     time.sleep(wait_seconds)
 
     pyautogui.PAUSE = 0.2
-    activated = activate_browser_window(wait_seconds=5)
+    activated = activate_browser_window(wait_seconds=10)
     if not activated:
         raise RuntimeError("Failed to activate Chrome/Edge window. Refusing to type into the wrong window.")
 
