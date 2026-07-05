@@ -16,29 +16,11 @@
 
 ## 現在の判断
 
-Playwright が起動した Chrome で、人間が手動入力しても `required parameter unavailable` が出る一方、普段使っている Chrome で同じ URL を開くとログインできる場合、問題は入力処理ではありません。
+`neverssl.com` が Captive Portal にリダイレクトされないなら、`neverssl.com` を入口URLとして使う前提は間違いです。
 
-差分は次です。
+このリポジトリでは、入口URLを自動で決め打ちしません。`CAPTIVE_ENTRY_URL` には、通常Chromeで実際にログイン画面が出ることを確認したURLだけを入れてください。
 
-```text
-Playwright Chrome:
-  Playwright 管理の起動方式
-  別プロファイル
-  自動化向け起動フラグ
-
-通常 Chrome:
-  普段のユーザープロファイル
-  保存済み Cookie / 設定
-  通常の起動方式
-```
-
-そのため、Playwright での完全自動ログインだけに寄せず、通常 Chrome をそのまま開く経路を使います。
-
-## 重要
-
-`CAPTIVE_PORTAL_URL` を直接開く運用はしません。
-
-Captive Portal は、通常の HTTP ページにアクセスしたときに、必要なパラメータ付きの認証URLへリダイレクトする場合があります。直接 `cp-login.php` を開くと、不完全なセッションやCookieが通常Chromeに残る可能性があります。
+また、ポータルURLを直接開く運用はしません。必要パラメータのないURLを直接開くと、不完全な状態がChrome側に残る可能性があります。
 
 通常Chromeでログインできなくなった場合は、`RECOVERY.md` を見て、Chromeの該当サイトデータを削除してください。
 
@@ -52,7 +34,7 @@ setup_windows.bat
 
 ```env
 CAPTIVE_PORTAL_URL=http://cpauth.cc.miyazaki-u.ac.jp/guest/cp-login.php
-CAPTIVE_ENTRY_URL=http://neverssl.com/
+CAPTIVE_ENTRY_URL=
 CAPTIVE_USERNAME=your-id
 CAPTIVE_PASSWORD=your-password
 CHECK_URL=http://connectivitycheck.gstatic.com/generate_204
@@ -67,22 +49,20 @@ BROWSER_ACCEPT_LANGUAGE=ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7
 
 `.env` は Git に入れないでください。
 
-## まず確認するコマンド
+## CAPTIVE_ENTRY_URL の決め方
 
-```bat
-.venv\Scripts\python.exe captive_login.py --help
-```
+`CAPTIVE_ENTRY_URL` は推測で入れないでください。
 
-以下が表示されれば、現行版です。
+正しい決め方は次です。
 
 ```text
---windows-manual
---submit-mode {auto,click,nwa,form-submit,enter}
---input-mode {fill,type,human}
---entry-mode {portal-flow,detect-first,direct}
+1. 通常Chromeを使う
+2. 手動でいくつかのURLを開く
+3. ログイン画面に遷移できたURLを確認する
+4. そのURLだけを CAPTIVE_ENTRY_URL に入れる
 ```
 
-`unrecognized arguments` が出る場合は、手元の `captive_login.py` が古いか、違うディレクトリで実行しています。
+ログイン画面に遷移しないURLは使いません。
 
 ## 通常 Chrome を使う実行
 
@@ -127,70 +107,7 @@ run_human.bat
 run_windows.bat force portal-flow auto human
 ```
 
-## 試す順番
-
-今回の観測結果から、優先順位は次です。
-
-```bat
-run_regular_chrome.bat
-```
-
-これでログイン画面が出ない場合、`CAPTIVE_ENTRY_URL` を別の HTTP URL に変更して再実行します。
-
-候補:
-
-```env
-CAPTIVE_ENTRY_URL=http://example.com/
-```
-
-または:
-
-```env
-CAPTIVE_ENTRY_URL=http://httpforever.com/
-```
-
-直接ポータルURLを通常Chromeで開くbatは削除済みです。
-
-## entry-mode
-
-```text
-portal-flow  通常HTTPページから Captive Portal リダイレクトを踏む。既定値。
-detect-first CHECK_URL からリダイレクト検出を試し、だめなら直接URLへフォールバック。
-direct       CAPTIVE_PORTAL_URL を直接開く。通常運用では使わない。
-```
-
-## submit-mode
-
-```text
-auto        Nwa_SubmitForm が存在すれば nwa、なければ click
-nwa         window.Nwa_SubmitForm(form.id, submit.id) を呼ぶ
-click       submit ボタンをクリック
-form-submit form.submit() を直接実行
-enter       Enter キーで送信
-```
-
-## input-mode
-
-```text
-fill   Playwright の fill() で値を入れる
-type   入力欄をクリックして Ctrl+A → type する
-human  ユーザー名欄をクリックし、Tab / type / Enter に寄せる
-```
-
-## ログとスクリーンショット
-
-スクリーンショットとHTMLは `screenshots/` に保存されます。
-
-```text
-screenshots/YYYYMMDD-HHMMSS-01-opened.png
-screenshots/YYYYMMDD-HHMMSS-01-opened.html
-screenshots/YYYYMMDD-HHMMSS-02-filled.png
-screenshots/YYYYMMDD-HHMMSS-02-filled.html
-screenshots/YYYYMMDD-HHMMSS-03-after-submit.png
-screenshots/YYYYMMDD-HHMMSS-03-after-submit.html
-```
-
-HTML保存時、`.env` のユーザー名とパスワードはマスクされます。
+ただし、Playwright が起動した Chrome で手動操作しても失敗する場合、Playwright 経路は一旦使わないでください。
 
 ## 注意
 
