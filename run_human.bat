@@ -1,3 +1,4 @@
 @echo off
 cd /d "%~dp0"
-call run_windows.bat force portal-flow auto human
+echo DISABLED: This runner is disabled to prevent further captive portal state changes.
+exit /b 1
