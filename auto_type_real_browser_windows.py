@@ -9,12 +9,17 @@ import pyautogui
 import pygetwindow as gw
 from dotenv import load_dotenv
 
-from open_real_browser_windows import log, resolve_captive_portal_url
+from open_real_browser_windows import log
 
 load_dotenv()
 
 USERNAME = os.getenv("CAPTIVE_USERNAME", "")
 PASSWORD = os.getenv("CAPTIVE_PASSWORD", "")
+CHECK_URL = os.getenv(
+    "CHECK_URL",
+    "http://connectivitycheck.gstatic.com/generate_204",
+)
+ENTRY_URL = os.getenv("REAL_BROWSER_ENTRY_URL", CHECK_URL)
 
 
 def require_credentials() -> None:
@@ -66,6 +71,7 @@ def launch_real_browser_app(url: str) -> None:
         "--no-default-browser-check",
     ]
     log(f"launch real browser: {browser_path}")
+    log(f"entry url: {url}")
     subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
@@ -127,7 +133,7 @@ def type_text_directly(text: str, interval: float) -> None:
 
 
 def auto_type_credentials(tab_count: int, wait_seconds: float, submit: bool, char_interval: float) -> None:
-    log(f"wait for browser: {wait_seconds}s")
+    log(f"wait for browser and portal redirect: {wait_seconds}s")
     time.sleep(wait_seconds)
 
     pyautogui.PAUSE = 0.2
@@ -156,15 +162,15 @@ def auto_type_credentials(tab_count: int, wait_seconds: float, submit: bool, cha
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--headed-resolver",
-        action="store_true",
-        help="Show the temporary Playwright resolver browser. Default: headless resolver.",
+        "--entry-url",
+        default=ENTRY_URL,
+        help="URL to open in the normal browser. Default: REAL_BROWSER_ENTRY_URL or CHECK_URL.",
     )
     parser.add_argument(
         "--wait-seconds",
         type=float,
-        default=float(os.getenv("REAL_BROWSER_WAIT_SECONDS", "5")),
-        help="Seconds to wait after opening the real browser. Default: 5.",
+        default=float(os.getenv("REAL_BROWSER_WAIT_SECONDS", "8")),
+        help="Seconds to wait after opening the real browser. Default: 8.",
     )
     parser.add_argument(
         "--tab-count",
@@ -183,25 +189,10 @@ def main() -> None:
         action="store_true",
         help="Type username/password but do not press Enter.",
     )
-    parser.add_argument(
-        "--url-only",
-        action="store_true",
-        help="Resolve and print the URL only. Do not open the real browser.",
-    )
     args = parser.parse_args()
 
     require_credentials()
-    url = resolve_captive_portal_url(headed=args.headed_resolver)
-
-    print()
-    print("Resolved URL:")
-    print(url)
-    print()
-
-    if args.url_only:
-        return
-
-    launch_real_browser_app(url)
+    launch_real_browser_app(args.entry_url)
     auto_type_credentials(
         tab_count=args.tab_count,
         wait_seconds=args.wait_seconds,
