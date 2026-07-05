@@ -11,6 +11,11 @@ load_dotenv()
 
 CAPTIVE_ENTRY_URL = os.getenv("CAPTIVE_ENTRY_URL", "http://neverssl.com/")
 CAPTIVE_PORTAL_URL = os.getenv("CAPTIVE_PORTAL_URL", "http://cpauth.cc.miyazaki-u.ac.jp/guest/cp-login.php")
+EXTRA_ENTRY_URLS = [
+    value.strip()
+    for value in os.getenv("EXTRA_ENTRY_URLS", "http://example.com/,http://httpforever.com/").split(",")
+    if value.strip()
+]
 
 
 def log(message: str) -> None:
@@ -31,13 +36,26 @@ def find_chrome() -> str | None:
     return shutil.which("chrome") or shutil.which("chrome.exe")
 
 
-def main() -> None:
-    mode = (sys.argv[1] if len(sys.argv) >= 2 else "portal-flow").lower()
+def urls_for_mode(mode: str) -> list[str]:
+    mode = mode.lower()
 
     if mode in {"direct", "portal"}:
-        url = CAPTIVE_PORTAL_URL
-    else:
-        url = CAPTIVE_ENTRY_URL
+        return [CAPTIVE_PORTAL_URL]
+
+    if mode in {"both", "all", "debug"}:
+        urls = [CAPTIVE_ENTRY_URL, CAPTIVE_PORTAL_URL, *EXTRA_ENTRY_URLS]
+        deduped = []
+        for url in urls:
+            if url and url not in deduped:
+                deduped.append(url)
+        return deduped
+
+    return [CAPTIVE_ENTRY_URL]
+
+
+def main() -> None:
+    mode = (sys.argv[1] if len(sys.argv) >= 2 else "entry").lower()
+    urls = urls_for_mode(mode)
 
     chrome = find_chrome()
     if not chrome:
@@ -45,12 +63,19 @@ def main() -> None:
 
     log("Regular Chrome launcher")
     log(f"chrome={chrome}")
-    log(f"url={url}")
+    log(f"mode={mode}")
     log("This script does not use Playwright and does not create a separate browser profile.")
 
-    subprocess.Popen([chrome, "--new-window", url], close_fds=True)
-    time.sleep(2)
-    log("Chrome opened. Complete the login in the regular Chrome window.")
+    for index, url in enumerate(urls, start=1):
+        log(f"open[{index}]={url}")
+        if index == 1:
+            subprocess.Popen([chrome, "--new-window", url], close_fds=True)
+        else:
+            subprocess.Popen([chrome, url], close_fds=True)
+        time.sleep(1)
+
+    log("Chrome opened. Complete the login in the regular Chrome window if the login page appears.")
+    log("If no login page appears, the network may already be authenticated or this entry URL is not being intercepted.")
 
 
 if __name__ == "__main__":
