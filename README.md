@@ -1,6 +1,6 @@
 # Campus Captive Portal Auto Login
 
-大学ネットワークの Captive Portal 認証を、Playwright で補助するためのリポジトリ。
+大学ネットワークの Captive Portal 認証を補助するためのリポジトリ。
 
 ## 目的
 
@@ -14,15 +14,23 @@
 
 そのため、PC 自身で認証ページを開き、ブラウザ上でログインできる状態にする。
 
-## 今回の方針
+## 現在の方針
 
-WSL ではなく、Windows ネイティブの Python から実行する。
+Playwright 管理下の Chrome でログイン送信すると、手動クリックでも `required parameter unavailable` が出るケースがある。
 
-理由:
+一方で、Playwright で得られた `final_url` を通常の Windows ブラウザで開き、そこでログインすると成功する。
 
-- WSL の headed 実行は X server / DISPLAY に依存する。
-- 今回は、実際に見えるブラウザを起動して、通常の人間操作に近い形でログイン認証したい。
-- Windows 側で Chrome / Chromium を起動すれば、通常のデスクトップセッション上でブラウザ操作を確認できる。
+そのため、現在は以下の方式にする。
+
+```text
+Playwright で Captive Portal の final_url だけ取得
+↓
+Playwright 管理下ブラウザは閉じる
+↓
+通常の Windows ブラウザで final_url を開く
+↓
+通常ブラウザ上でユーザーがログインする
+```
 
 ## ファイル
 
@@ -35,15 +43,17 @@ WSL ではなく、Windows ネイティブの Python から実行する。
 ├── setup.sh
 ├── setup_windows.bat
 ├── run_windows.bat
+├── open_real_browser_windows.py
 ├── manual_login_windows.py
 ├── test.py
 └── captive_login.py
 ```
 
-- `manual_login_windows.py`: Windows 上でブラウザを表示し、ID/Password入力後、最後のログイン操作だけ手動で行うためのスクリプト。
+- `open_real_browser_windows.py`: Playwright で Captive Portal の final_url を解決し、通常の Windows ブラウザで開く。
+- `run_windows.bat`: `open_real_browser_windows.py` を実行するラッパー。
+- `manual_login_windows.py`: Playwright 管理下ブラウザで入力し、最後だけ手動クリックする旧切り分け用スクリプト。
 - `captive_login.py`: 自動送信用の既存スクリプト。
 - `setup_windows.bat`: Windows ネイティブ環境の初期セットアップ。Python がなければ winget で Python 3.12 のインストールも試す。
-- `run_windows.bat`: `manual_login_windows.py` を実行するラッパー。
 - `test.py`: 認証ページを開いて `login.png` を保存する簡易確認用。
 
 ## Windows セットアップ
@@ -80,9 +90,7 @@ PORTAL_REQUIRED_PARAMETER_TEXT=required parameter unavailable
 
 `.env` は Git に入れない。
 
-## Windows で手動実行
-
-通常実行:
+## Windows で実行
 
 ```bat
 run_windows.bat
@@ -91,52 +99,58 @@ run_windows.bat
 `run_windows.bat` は内部で以下に相当する実行を行う。
 
 ```bat
-.venv\Scripts\python.exe manual_login_windows.py
+.venv\Scripts\python.exe open_real_browser_windows.py
 ```
 
 流れ:
 
 ```text
-CHECK_URL を開く
+CHECK_URL を Playwright で開く
 ↓
-Captive Portal にリダイレクトされれば、そのページを使う
+Captive Portal にリダイレクトされた final_url を取得
 ↓
-リダイレクトされなければ CAPTIVE_PORTAL_URL を直接開く
+final_url を screenshots/YYYYMMDD-HHMMSS-resolved-url.txt に保存
 ↓
-ID / Password を入力
+通常の Windows ブラウザで final_url を開く
 ↓
-ブラウザを開いたまま停止
-↓
-ユーザーがブラウザ上でログインボタンを手動クリック
-↓
-ターミナルで Enter
-↓
-スクリーンショットとHTMLを保存
+ユーザーが通常ブラウザ上でログインする
 ```
 
-`required parameter unavailable` が出る場合、まずこの手動実行を使う。自動送信ではなく、ブラウザ上で実際にログインボタンを押すことで、ページ側のJavaScriptやhidden input更新をそのまま使う。
+URLだけ確認する場合:
+
+```bat
+run_windows.bat --url-only
+```
+
+URL解決用の一時 Playwright ブラウザを表示したい場合:
+
+```bat
+run_windows.bat --headed-resolver
+```
 
 ## 実行ログ
 
-スクリーンショットとHTMLは `screenshots/` に保存される。
+解決したURLは `screenshots/` に保存される。
 
 ```text
-screenshots/YYYYMMDD-HHMMSS-01-opened.png
-screenshots/YYYYMMDD-HHMMSS-02-filled.png
-screenshots/YYYYMMDD-HHMMSS-03-after-manual-login.png
+screenshots/YYYYMMDD-HHMMSS-resolved-url.txt
 ```
 
-HTML保存時、`.env` のユーザー名とパスワードはマスクされる。
+## 旧方式
 
-## 自動送信を試す場合
+Playwright 管理下ブラウザでID/Passwordを入力し、最後だけ手動クリックする旧切り分け用スクリプト:
 
-既存の `captive_login.py` を直接実行する。
+```bat
+.venv\Scripts\python.exe manual_login_windows.py
+```
+
+自動送信を試す場合:
 
 ```bat
 .venv\Scripts\python.exe captive_login.py --windows-manual --force
 ```
 
-ただし、`required parameter unavailable` が出る場合は、`manual_login_windows.py` を優先する。
+ただし、Playwright 管理下ブラウザで `required parameter unavailable` が出る場合は、`run_windows.bat` の通常ブラウザ方式を使う。
 
 ## WSL / Linux セットアップ
 
@@ -147,13 +161,13 @@ chmod +x setup.sh
 ./setup.sh
 ```
 
-ただし、headed 実行は X server / DISPLAY に依存する。Windowsで見えるブラウザを起動したい場合は、WSLではなく `setup_windows.bat` と `run_windows.bat` を使う。
+ただし、headed 実行は X server / DISPLAY に依存する。Windowsで通常ブラウザを開きたい場合は、WSLではなく `setup_windows.bat` と `run_windows.bat` を使う。
 
 ## 注意
 
 - `.env` をコミットしない。
 - 認証情報をコードに直書きしない。
 - スクリーンショットに情報が写る可能性があるため Git に入れない。
-- `.playwright-profile/` は Git に入れない。
+- `.playwright-profile/` と `.playwright-url-resolver-profile/` は Git に入れない。
 - CAPTCHA / MFA / OTP には対応しない。
 - 利用前にネットワーク利用規程を確認する。
