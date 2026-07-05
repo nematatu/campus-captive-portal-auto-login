@@ -18,7 +18,7 @@
 
 Playwright が起動した Chrome で、人間が手動入力しても `required parameter unavailable` が出る一方、普段使っている Chrome で同じ URL を開くとログインできる場合、問題は入力処理ではありません。
 
-この場合の差分は次です。
+差分は次です。
 
 ```text
 Playwright Chrome:
@@ -80,19 +80,25 @@ BROWSER_ACCEPT_LANGUAGE=ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7
 
 Playwright Chrome ではなく、Windows に入っている通常 Chrome をそのまま起動します。
 
+まず、通常HTTP入口を開きます。
+
 ```bat
 run_regular_chrome.bat
 ```
 
-これは `open_regular_chrome.py` を呼び出します。
+ログイン画面が表示されない場合は、直接ポータルURLを開きます。
+
+```bat
+run_regular_chrome_direct.bat
+```
+
+これらは `open_regular_chrome.py` を呼び出します。
 
 ```text
 Playwright を使わない
 別プロファイルを作らない
 Chrome を通常起動する
 ```
-
-まずは、この方法で開いた通常 Chrome 上で手動ログインできるか確認してください。
 
 ## Playwright で実行
 
@@ -126,6 +132,12 @@ run_windows.bat force portal-flow auto human
 
 ```bat
 run_regular_chrome.bat
+```
+
+ログイン画面が出なければ次です。
+
+```bat
+run_regular_chrome_direct.bat
 ```
 
 これで手動ログインできるなら、Playwright 起動 Chrome の問題です。
