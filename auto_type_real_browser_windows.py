@@ -19,7 +19,28 @@ CHECK_URL = os.getenv(
     "CHECK_URL",
     "http://connectivitycheck.gstatic.com/generate_204",
 )
-ENTRY_URL = os.getenv("REAL_BROWSER_ENTRY_URL", CHECK_URL)
+DEFAULT_ENTRY_URLS = [
+    CHECK_URL,
+    "http://neverssl.com/",
+    "http://example.com/",
+    "http://detectportal.firefox.com/canonical.html",
+    "http://www.msftconnecttest.com/connecttest.txt",
+    "http://captive.apple.com/hotspot-detect.html",
+]
+
+PORTAL_TITLE_KEYWORDS = [
+    "宮崎大学ネットワーク認証",
+    "ネットワーク認証",
+    "認証",
+    "cpauth",
+    "cp-login",
+]
+BROWSER_TITLE_KEYWORDS = [
+    "chrome",
+    "edge",
+    "google chrome",
+    "microsoft edge",
+]
 
 
 def require_credentials() -> None:
@@ -30,6 +51,18 @@ def require_credentials() -> None:
         missing.append("CAPTIVE_PASSWORD")
     if missing:
         raise RuntimeError(f"Missing environment variables: {', '.join(missing)}")
+
+
+def parse_entry_urls(cli_entry_urls: str | None) -> list[str]:
+    raw = cli_entry_urls or os.getenv("REAL_BROWSER_ENTRY_URLS") or ""
+    if raw.strip():
+        urls = []
+        for part in raw.replace("\n", ";").split(";"):
+            value = part.strip()
+            if value:
+                urls.append(value)
+        return urls
+    return DEFAULT_ENTRY_URLS
 
 
 def find_browser_executable() -> str | None:
@@ -84,62 +117,59 @@ def list_window_titles() -> list[str]:
     return titles
 
 
-def activate_browser_window(wait_seconds: float) -> bool:
-    deadline = time.time() + max(wait_seconds, 1)
-    keywords = [
-        "宮崎大学ネットワーク認証",
-        "ネットワーク認証",
-        "認証",
-        "cpauth",
-        "cp-login",
-        "chrome",
-        "edge",
-        "google chrome",
-        "microsoft edge",
-    ]
+def title_contains_any(title: str, keywords: list[str]) -> bool:
+    lowered = title.lower()
+    return any(keyword.lower() in lowered for keyword in keywords)
 
-    while time.time() < deadline:
-        candidates = []
-        for window in gw.getAllWindows():
-            title = (window.title or "").strip()
-            if not title:
-                continue
-            lowered = title.lower()
-            if any(keyword.lower() in lowered for keyword in keywords):
-                candidates.append(window)
 
-        for window in reversed(candidates):
-            try:
-                if window.isMinimized:
-                    window.restore()
-                window.activate()
-                time.sleep(0.8)
-                log(f"activated window: {window.title!r}")
-                return True
-            except Exception as error:
-                log(f"window activation failed: title={window.title!r}, error={error}")
+def find_portal_window():
+    candidates = []
+    for window in gw.getAllWindows():
+        title = (window.title or "").strip()
+        if title and title_contains_any(title, PORTAL_TITLE_KEYWORDS):
+            candidates.append(window)
+    return candidates[-1] if candidates else None
 
-        time.sleep(0.5)
 
-    log("browser window was not activated")
+def activate_window(window) -> bool:
+    try:
+        if window.isMinimized:
+            window.restore()
+        window.activate()
+        time.sleep(0.8)
+        log(f"activated window: {window.title!r}")
+        return True
+    except Exception as error:
+        log(f"window activation failed: title={window.title!r}, error={error}")
+        return False
+
+
+def open_until_portal(entry_urls: list[str], wait_each_seconds: float):
+    for index, url in enumerate(entry_urls, start=1):
+        log(f"try entry url {index}/{len(entry_urls)}: {url}")
+        launch_real_browser_app(url)
+        deadline = time.time() + max(wait_each_seconds, 1)
+        while time.time() < deadline:
+            portal_window = find_portal_window()
+            if portal_window and activate_window(portal_window):
+                return portal_window
+            time.sleep(0.5)
+
+        log(f"portal window not detected for entry url: {url}")
+
+    log("portal window was not detected from any entry URL")
     log("visible window titles:")
     for title in list_window_titles():
         log(f"  {title}")
-    return False
+    return None
 
 
 def type_text_directly(text: str, interval: float) -> None:
     pyautogui.write(text, interval=interval)
 
 
-def auto_type_credentials(tab_count: int, wait_seconds: float, submit: bool, char_interval: float) -> None:
-    log(f"wait for browser and portal redirect: {wait_seconds}s")
-    time.sleep(wait_seconds)
-
+def auto_type_credentials(tab_count: int, submit: bool, char_interval: float) -> None:
     pyautogui.PAUSE = 0.2
-    activated = activate_browser_window(wait_seconds=10)
-    if not activated:
-        raise RuntimeError("Failed to activate Chrome/Edge window. Refusing to type into the wrong window.")
 
     # Keyboard-only flow. No clipboard paste and no manual click.
     for _ in range(tab_count):
@@ -163,14 +193,14 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--entry-url",
-        default=ENTRY_URL,
-        help="URL to open in the normal browser. Default: REAL_BROWSER_ENTRY_URL or CHECK_URL.",
+        dest="entry_urls",
+        help="Semicolon-separated URL list to try. Default: REAL_BROWSER_ENTRY_URLS or built-in HTTP probe URLs.",
     )
     parser.add_argument(
         "--wait-seconds",
         type=float,
         default=float(os.getenv("REAL_BROWSER_WAIT_SECONDS", "8")),
-        help="Seconds to wait after opening the real browser. Default: 8.",
+        help="Seconds to wait for portal redirect per entry URL. Default: 8.",
     )
     parser.add_argument(
         "--tab-count",
@@ -192,10 +222,17 @@ def main() -> None:
     args = parser.parse_args()
 
     require_credentials()
-    launch_real_browser_app(args.entry_url)
+    entry_urls = parse_entry_urls(args.entry_urls)
+    log("entry URL candidates:")
+    for url in entry_urls:
+        log(f"  {url}")
+
+    portal_window = open_until_portal(entry_urls, wait_each_seconds=args.wait_seconds)
+    if not portal_window:
+        raise RuntimeError("Captive Portal window was not detected. Add a working HTTP URL to REAL_BROWSER_ENTRY_URLS.")
+
     auto_type_credentials(
         tab_count=args.tab_count,
-        wait_seconds=args.wait_seconds,
         submit=not args.no_submit,
         char_interval=args.char_interval,
     )
