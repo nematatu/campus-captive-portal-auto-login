@@ -15,11 +15,16 @@ load_dotenv()
 
 USERNAME = os.getenv("CAPTIVE_USERNAME", "")
 PASSWORD = os.getenv("CAPTIVE_PASSWORD", "")
+LOGIN_URL = os.getenv(
+    "CAPTIVE_PORTAL_URL",
+    "http://cpauth.cc.miyazaki-u.ac.jp/guest/cp-login.php",
+)
 CHECK_URL = os.getenv(
     "CHECK_URL",
     "http://connectivitycheck.gstatic.com/generate_204",
 )
 DEFAULT_ENTRY_URLS = [
+    LOGIN_URL,
     CHECK_URL,
     "http://neverssl.com/",
     "http://example.com/",
@@ -168,7 +173,27 @@ def type_text_directly(text: str, interval: float) -> None:
     pyautogui.write(text, interval=interval)
 
 
-def auto_type_credentials(tab_count: int, submit: bool, char_interval: float) -> None:
+def submit_login_button(submit_tab_count: int, submit_key: str) -> None:
+    for _ in range(submit_tab_count):
+        pyautogui.press("tab")
+
+    if submit_key == "space":
+        log("press Space on focused login button")
+        pyautogui.press("space")
+    elif submit_key == "enter":
+        log("press Enter on focused login button")
+        pyautogui.press("enter")
+    else:
+        raise RuntimeError(f"Unknown submit key: {submit_key}")
+
+
+def auto_type_credentials(
+    tab_count: int,
+    submit: bool,
+    char_interval: float,
+    submit_tab_count: int,
+    submit_key: str,
+) -> None:
     pyautogui.PAUSE = 0.2
 
     # Keyboard-only flow. No clipboard paste and no manual click.
@@ -183,8 +208,7 @@ def auto_type_credentials(tab_count: int, submit: bool, char_interval: float) ->
     type_text_directly(PASSWORD, interval=char_interval)
 
     if submit:
-        log("press Enter to submit")
-        pyautogui.press("enter")
+        submit_login_button(submit_tab_count=submit_tab_count, submit_key=submit_key)
     else:
         log("submit skipped")
 
@@ -194,19 +218,31 @@ def main() -> None:
     parser.add_argument(
         "--entry-url",
         dest="entry_urls",
-        help="Semicolon-separated URL list to try. Default: REAL_BROWSER_ENTRY_URLS or built-in HTTP probe URLs.",
+        help="Semicolon-separated URL list to try. Default: REAL_BROWSER_ENTRY_URLS or built-in URLs.",
     )
     parser.add_argument(
         "--wait-seconds",
         type=float,
         default=float(os.getenv("REAL_BROWSER_WAIT_SECONDS", "8")),
-        help="Seconds to wait for portal redirect per entry URL. Default: 8.",
+        help="Seconds to wait for portal page per entry URL. Default: 8.",
     )
     parser.add_argument(
         "--tab-count",
         type=int,
         default=int(os.getenv("REAL_BROWSER_INITIAL_TAB_COUNT", "1")),
         help="Number of Tab key presses before typing username. Default: 1.",
+    )
+    parser.add_argument(
+        "--submit-tab-count",
+        type=int,
+        default=int(os.getenv("REAL_BROWSER_SUBMIT_TAB_COUNT", "1")),
+        help="Number of Tab key presses from password field to login button. Default: 1.",
+    )
+    parser.add_argument(
+        "--submit-key",
+        choices=["space", "enter"],
+        default=os.getenv("REAL_BROWSER_SUBMIT_KEY", "space"),
+        help="Key used on focused login button. Default: space.",
     )
     parser.add_argument(
         "--char-interval",
@@ -217,7 +253,7 @@ def main() -> None:
     parser.add_argument(
         "--no-submit",
         action="store_true",
-        help="Type username/password but do not press Enter.",
+        help="Type username/password but do not submit.",
     )
     args = parser.parse_args()
 
@@ -229,12 +265,14 @@ def main() -> None:
 
     portal_window = open_until_portal(entry_urls, wait_each_seconds=args.wait_seconds)
     if not portal_window:
-        raise RuntimeError("Captive Portal window was not detected. Add a working HTTP URL to REAL_BROWSER_ENTRY_URLS.")
+        raise RuntimeError("Captive Portal window was not detected. Add a working URL to REAL_BROWSER_ENTRY_URLS.")
 
     auto_type_credentials(
         tab_count=args.tab_count,
         submit=not args.no_submit,
         char_interval=args.char_interval,
+        submit_tab_count=args.submit_tab_count,
+        submit_key=args.submit_key,
     )
 
 
