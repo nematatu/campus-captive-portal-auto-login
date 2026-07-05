@@ -1,82 +1,94 @@
-# Recovery: regular Chrome cannot login after direct portal access
+# Recovery
 
-If regular Chrome stopped logging in after opening the captive portal URL directly, the likely cause is a bad portal session, cookie, or cached state in the normal Chrome profile.
+Stop running this repository for now. The runners are disabled.
 
-This does not usually mean the account is broken. It usually means Chrome is reusing a failed captive portal state.
+If Chrome profiles, incognito mode, and other browsers all fail on the same Windows PC, but another device such as a Mac can still log in, the problem is probably not a browser profile anymore.
 
-## First recovery steps
+The likely state is device-level or network-level captive portal state for that Windows PC, such as IP address, adapter, DNS, or a server-side portal session tied to the device.
 
-1. Close all Chrome windows.
-2. Reopen Chrome.
-3. Open this page in the address bar:
+## Do not do these
 
-```text
-chrome://settings/siteData
-```
-
-4. Search for:
-
-```text
-cpauth
-```
-
-5. Delete all matching site data.
-6. Search for:
-
-```text
-miyazaki
-```
-
-7. Delete matching captive portal / university network site data.
-8. Close all Chrome windows again.
-9. Open a plain HTTP page, not the direct portal URL:
-
-```text
-http://neverssl.com/
-```
-
-If the login page appears, log in manually.
-
-## If that does not recover it
-
-Open:
-
-```text
-chrome://settings/clearBrowserData
-```
-
-Use:
-
-```text
-Time range: Last 24 hours
-Cached images and files: on
-Cookies and other site data: on
-```
-
-Then close Chrome and try:
-
-```text
-http://neverssl.com/
-```
-
-This may sign you out of some sites. Prefer the site-specific deletion above first.
-
-## What not to do
-
-Do not open the direct portal URL first:
+Do not open the direct portal URL first.
 
 ```text
 http://cpauth.cc.miyazaki-u.ac.jp/guest/cp-login.php
 ```
 
-Use a normal HTTP entry URL and let the network redirect Chrome to the correct portal URL with required parameters.
+Do not keep retrying automation.
 
-## Repository change
+Do not use Playwright for recovery.
 
-The direct regular Chrome runner has been removed. `open_regular_chrome.py` now refuses direct portal launch unless explicitly enabled with:
+## Step 1: stop Chrome and clear local network cache
 
-```text
-ALLOW_DIRECT_PORTAL_URL=1
+Open Command Prompt as Administrator and run:
+
+```bat
+ipconfig /flushdns
+ipconfig /release
+ipconfig /renew
 ```
 
-Do not enable this unless you have confirmed that the portal accepts direct access.
+Then reboot Windows.
+
+## Step 2: forget and reconnect to the network
+
+If this is Wi-Fi:
+
+1. Windows Settings
+2. Network & internet
+3. Wi-Fi
+4. Manage known networks
+5. Forget the university network
+6. Reconnect manually
+
+If this is Ethernet:
+
+1. Unplug Ethernet
+2. Wait at least 60 seconds
+3. Plug it back in
+4. Reboot if the captive portal still fails
+
+## Step 3: reset Windows network stack
+
+Use this only if Step 1 and Step 2 fail.
+
+Open Command Prompt as Administrator:
+
+```bat
+netsh winsock reset
+netsh int ip reset
+ipconfig /flushdns
+```
+
+Then reboot Windows.
+
+## Step 4: try the normal user path only
+
+After reboot, use the normal browser path that worked before. Do not use this repository.
+
+Do not directly open `cp-login.php`.
+
+Use whatever page or OS prompt normally brings up the university login page.
+
+## Step 5: if it still fails
+
+Contact the campus network administrator and say:
+
+```text
+This Windows PC can no longer complete captive portal login, but another device can.
+Different browsers and incognito mode fail, so it does not appear to be a browser profile issue.
+Please clear the captive portal session/state for this device or tell me the correct login entry URL.
+```
+
+Avoid saying that you need bypass. Ask for session/state reset and the correct official login flow.
+
+## Repository status
+
+The runners have been disabled to avoid causing more state changes:
+
+```text
+run_windows.bat
+run_force.bat
+run_human.bat
+run_regular_chrome.bat
+```
