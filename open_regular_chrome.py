@@ -11,6 +11,7 @@ load_dotenv()
 
 CAPTIVE_ENTRY_URL = os.getenv("CAPTIVE_ENTRY_URL", "http://neverssl.com/")
 CAPTIVE_PORTAL_URL = os.getenv("CAPTIVE_PORTAL_URL", "http://cpauth.cc.miyazaki-u.ac.jp/guest/cp-login.php")
+ALLOW_DIRECT_PORTAL_URL = os.getenv("ALLOW_DIRECT_PORTAL_URL", "").strip() == "1"
 EXTRA_ENTRY_URLS = [
     value.strip()
     for value in os.getenv("EXTRA_ENTRY_URLS", "http://example.com/,http://httpforever.com/").split(",")
@@ -40,10 +41,15 @@ def urls_for_mode(mode: str) -> list[str]:
     mode = mode.lower()
 
     if mode in {"direct", "portal"}:
+        if not ALLOW_DIRECT_PORTAL_URL:
+            log("Direct portal URL launch is disabled by default.")
+            log("Do not open CAPTIVE_PORTAL_URL directly unless you know the portal accepts direct access.")
+            log("Use the entry URL flow instead: run_regular_chrome.bat")
+            return []
         return [CAPTIVE_PORTAL_URL]
 
     if mode in {"both", "all", "debug"}:
-        urls = [CAPTIVE_ENTRY_URL, CAPTIVE_PORTAL_URL, *EXTRA_ENTRY_URLS]
+        urls = [CAPTIVE_ENTRY_URL, *EXTRA_ENTRY_URLS]
         deduped = []
         for url in urls:
             if url and url not in deduped:
@@ -56,6 +62,9 @@ def urls_for_mode(mode: str) -> list[str]:
 def main() -> None:
     mode = (sys.argv[1] if len(sys.argv) >= 2 else "entry").lower()
     urls = urls_for_mode(mode)
+
+    if not urls:
+        return
 
     chrome = find_chrome()
     if not chrome:
