@@ -1,3 +1,5 @@
 @echo off
 cd /d "%~dp0"
-.venv\Scripts\python.exe captive_login.py --windows-manual %*
+echo DISABLED: This runner is disabled to prevent further captive portal state changes.
+echo Do not run login automation until the network state is recovered and the portal flow is understood.
+exit /b 1
