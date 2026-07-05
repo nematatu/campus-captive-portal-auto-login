@@ -14,23 +14,25 @@
 
 そのため、外から復旧するのではなく、研究室 PC 自身が認証状態を確認し、必要なら Captive Portal 認証を実行します。
 
-## 重要な前提
+## 現在の判断
 
-`required parameter unavailable` が出る場合、ID/パスワード入力の問題ではなく、認証ページへの入り方が問題である可能性が高いです。
+Playwright が起動した Chrome で、人間が手動入力しても `required parameter unavailable` が出る一方、普段使っている Chrome で同じ URL を開くとログインできる場合、問題は入力処理ではありません。
 
-Captive Portal は、`cp-login.php` を直接開くだけではなく、通常の HTTP ページへアクセスしたときのリダイレクトで必要パラメータを付ける場合があります。
-
-そのため、現在の既定値は `direct` ではなく `portal-flow` です。
+この場合の差分は次です。
 
 ```text
-http://neverssl.com/
-  ↓
-大学ネットワーク側で Captive Portal にリダイレクト
-  ↓
-必要パラメータ付きの認証ページ
-  ↓
-ログイン
+Playwright Chrome:
+  Playwright 管理の起動方式
+  別プロファイル
+  自動化向け起動フラグ
+
+通常 Chrome:
+  普段のユーザープロファイル
+  保存済み Cookie / 設定
+  通常の起動方式
 ```
+
+そのため、Playwright での完全自動ログインだけに寄せず、通常 Chrome をそのまま開く経路を追加しています。
 
 ## Windows セットアップ
 
@@ -74,7 +76,25 @@ BROWSER_ACCEPT_LANGUAGE=ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7
 
 `unrecognized arguments` が出る場合は、手元の `captive_login.py` が古いか、違うディレクトリで実行しています。
 
-## Windows で実行
+## 通常 Chrome を使う実行
+
+Playwright Chrome ではなく、Windows に入っている通常 Chrome をそのまま起動します。
+
+```bat
+run_regular_chrome.bat
+```
+
+これは `open_regular_chrome.py` を呼び出します。
+
+```text
+Playwright を使わない
+別プロファイルを作らない
+Chrome を通常起動する
+```
+
+まずは、この方法で開いた通常 Chrome 上で手動ログインできるか確認してください。
+
+## Playwright で実行
 
 通常実行:
 
@@ -102,37 +122,21 @@ run_windows.bat force portal-flow auto human
 
 ## 試す順番
 
-まずこれです。
+今回の観測結果から、優先順位は次です。
 
 ```bat
-run_force.bat
+run_regular_chrome.bat
 ```
 
-だめなら、次です。
+これで手動ログインできるなら、Playwright 起動 Chrome の問題です。
 
-```bat
-run_human.bat
-```
-
-まだ `required parameter unavailable` が出る場合は、`.env` の `CAPTIVE_ENTRY_URL` を別の HTTP URL に変えます。
-
-候補:
-
-```env
-CAPTIVE_ENTRY_URL=http://example.com/
-```
-
-または:
-
-```env
-CAPTIVE_ENTRY_URL=http://httpforever.com/
-```
-
-その後、再実行します。
+次に Playwright 側を比較します。
 
 ```bat
 run_human.bat
 ```
+
+まだ `required parameter unavailable` が出る場合、Playwright Chrome 経路は一旦捨ててください。
 
 ## entry-mode
 
